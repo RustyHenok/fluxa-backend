@@ -169,6 +169,8 @@ mod tests {
                 max_job_attempts: 3,
                 database_max_connections: 1,
                 cors_allow_origin: "*".into(),
+                startup_max_retries: 3,
+                startup_retry_delay_ms: 100,
             }
             .validate()
             .unwrap(),

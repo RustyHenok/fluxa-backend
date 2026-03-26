@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use sqlx::{Encode, PgPool, Postgres, QueryBuilder, Type};
 use uuid::Uuid;
 
 use crate::config::SharedConfig;
@@ -36,7 +36,7 @@ impl Database {
     }
 
     pub async fn health_check(&self) -> AppResult<()> {
-        let _: i64 = sqlx::query_scalar("SELECT 1").fetch_one(&self.pool).await?;
+        let _: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&self.pool).await?;
         Ok(())
     }
 
@@ -424,36 +424,46 @@ impl Database {
         input: UpdateTaskInput,
     ) -> AppResult<TaskRecord> {
         let mut builder = QueryBuilder::<Postgres>::new("UPDATE tasks SET ");
-        let mut separated = builder.separated(", ");
+        let mut needs_separator = false;
         let mut changed = 0usize;
 
         if let Some(title) = input.title.as_ref() {
-            separated.push("title = ").push_bind(title.trim());
+            push_update_assignment(&mut builder, &mut needs_separator, "title", title.trim());
             changed += 1;
         }
 
         if let Some(description) = input.description.clone() {
-            separated.push("description = ").push_bind(description);
+            push_update_assignment(
+                &mut builder,
+                &mut needs_separator,
+                "description",
+                description,
+            );
             changed += 1;
         }
 
         if let Some(status) = input.status.as_ref() {
-            separated.push("status = ").push_bind(status);
+            push_update_assignment(&mut builder, &mut needs_separator, "status", status);
             changed += 1;
         }
 
         if let Some(priority) = input.priority.as_ref() {
-            separated.push("priority = ").push_bind(priority);
+            push_update_assignment(&mut builder, &mut needs_separator, "priority", priority);
             changed += 1;
         }
 
         if let Some(assignee_id) = input.assignee_id {
-            separated.push("assignee_id = ").push_bind(assignee_id);
+            push_update_assignment(
+                &mut builder,
+                &mut needs_separator,
+                "assignee_id",
+                assignee_id,
+            );
             changed += 1;
         }
 
         if let Some(due_at) = input.due_at {
-            separated.push("due_at = ").push_bind(due_at);
+            push_update_assignment(&mut builder, &mut needs_separator, "due_at", due_at);
             changed += 1;
         }
 
@@ -464,9 +474,8 @@ impl Database {
         }
 
         let now = Utc::now();
-        separated.push("updated_by = ").push_bind(actor_id);
-        separated.push("updated_at = ").push_bind(now);
-        drop(separated);
+        push_update_assignment(&mut builder, &mut needs_separator, "updated_by", actor_id);
+        push_update_assignment(&mut builder, &mut needs_separator, "updated_at", now);
         builder.push(" WHERE tenant_id = ");
         builder.push_bind(tenant_id);
         builder.push(" AND id = ");
@@ -803,6 +812,24 @@ impl Database {
     }
 }
 
+fn push_update_assignment<'args, T>(
+    builder: &mut QueryBuilder<'args, Postgres>,
+    needs_separator: &mut bool,
+    column: &str,
+    value: T,
+) where
+    T: 'args + Encode<'args, Postgres> + Type<Postgres>,
+{
+    if *needs_separator {
+        builder.push(", ");
+    }
+
+    builder.push(column);
+    builder.push(" = ");
+    builder.push_bind(value);
+    *needs_separator = true;
+}
+
 fn apply_task_filters<'a>(
     builder: &mut QueryBuilder<'a, Postgres>,
     filters: &'a TaskFilters,
@@ -855,5 +882,35 @@ fn apply_task_filters<'a>(
         builder.push(" AND id < ");
         builder.push_bind(cursor.id);
         builder.push("))");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use sqlx::{Postgres, QueryBuilder};
+    use uuid::Uuid;
+
+    use super::push_update_assignment;
+
+    #[test]
+    fn update_assignment_builder_keeps_set_clause_valid() {
+        let mut builder = QueryBuilder::<Postgres>::new("UPDATE tasks SET ");
+        let mut needs_separator = false;
+
+        push_update_assignment(&mut builder, &mut needs_separator, "status", "in_progress");
+        push_update_assignment(&mut builder, &mut needs_separator, "priority", "urgent");
+        push_update_assignment(
+            &mut builder,
+            &mut needs_separator,
+            "updated_by",
+            Uuid::nil(),
+        );
+        push_update_assignment(&mut builder, &mut needs_separator, "updated_at", Utc::now());
+
+        assert_eq!(
+            builder.sql(),
+            "UPDATE tasks SET status = $1, priority = $2, updated_by = $3, updated_at = $4"
+        );
     }
 }
