@@ -16,7 +16,7 @@ use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::{Cli, ServiceMode};
@@ -28,9 +28,10 @@ pub async fn run(cli: Cli) -> AppResult<()> {
 
     let config = Arc::new(cli.validate()?);
     let metrics = install_metrics()?;
-    let db = db::Database::connect(&config).await?;
+    let db = connect_database_with_retry(config.clone()).await?;
     db.migrate().await?;
     let cache = cache::CacheStore::new(config.redis_url.clone(), config.clone())?;
+    wait_for_cache_with_retry(&cache, config.clone()).await?;
     let auth = auth::AuthService::new(config.clone())?;
     let state = AppState::new(config.clone(), db, cache, auth, metrics);
 
@@ -127,4 +128,47 @@ pub async fn bind_listener(addr: std::net::SocketAddr) -> AppResult<TcpListener>
     TcpListener::bind(addr)
         .await
         .map_err(|error| AppError::internal(format!("failed to bind {addr}: {error}")))
+}
+
+async fn connect_database_with_retry(config: config::SharedConfig) -> AppResult<db::Database> {
+    let mut last_error = None;
+
+    for attempt in 1..=config.startup_max_retries {
+        match db::Database::connect(&config).await {
+            Ok(database) => return Ok(database),
+            Err(error) => {
+                warn!(
+                    "database connection attempt {attempt}/{} failed: {error}",
+                    config.startup_max_retries
+                );
+                last_error = Some(error);
+                tokio::time::sleep(config.startup_retry_delay()).await;
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| AppError::internal("database connection failed")))
+}
+
+async fn wait_for_cache_with_retry(
+    cache: &cache::CacheStore,
+    config: config::SharedConfig,
+) -> AppResult<()> {
+    let mut last_error = None;
+
+    for attempt in 1..=config.startup_max_retries {
+        match cache.ping().await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                warn!(
+                    "redis readiness attempt {attempt}/{} failed: {error}",
+                    config.startup_max_retries
+                );
+                last_error = Some(error);
+                tokio::time::sleep(config.startup_retry_delay()).await;
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| AppError::internal("redis readiness failed")))
 }

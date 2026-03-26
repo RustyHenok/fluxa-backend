@@ -32,6 +32,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       APP_MODE: api
       HTTP_ADDR: 0.0.0.0:8080
@@ -52,6 +53,7 @@ services:
   worker:
     image: fluxa-backend:local
     command: ["fluxa-backend", "--mode", "worker"]
+    restart: unless-stopped
     environment:
       APP_MODE: worker
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/fluxa

@@ -62,6 +62,10 @@ pub struct Cli {
     pub max_job_attempts: i32,
     #[arg(long, env = "DATABASE_MAX_CONNECTIONS", default_value_t = 10)]
     pub database_max_connections: u32,
+    #[arg(long, env = "STARTUP_MAX_RETRIES", default_value_t = 20)]
+    pub startup_max_retries: u32,
+    #[arg(long, env = "STARTUP_RETRY_DELAY_MS", default_value_t = 1_500)]
+    pub startup_retry_delay_ms: u64,
     #[arg(long, env = "CORS_ALLOW_ORIGIN", default_value = "*")]
     pub cors_allow_origin: String,
 }
@@ -96,6 +100,12 @@ impl Cli {
             ));
         }
 
+        if self.startup_max_retries == 0 || self.startup_retry_delay_ms == 0 {
+            return Err(AppError::Validation(
+                "startup retry settings must be positive".into(),
+            ));
+        }
+
         Ok(self)
     }
 
@@ -121,6 +131,10 @@ impl Cli {
 
     pub fn worker_scheduler_interval(&self) -> Duration {
         Duration::from_millis(self.worker_scheduler_interval_ms)
+    }
+
+    pub fn startup_retry_delay(&self) -> Duration {
+        Duration::from_millis(self.startup_retry_delay_ms)
     }
 }
 
