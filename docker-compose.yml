@@ -28,6 +28,7 @@ services:
       retries: 10
 
   api:
+    image: fluxa-backend:local
     build:
       context: .
       dockerfile: Dockerfile
@@ -49,9 +50,7 @@ services:
         condition: service_healthy
 
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: fluxa-backend:local
     command: ["fluxa-backend", "--mode", "worker"]
     environment:
       APP_MODE: worker
