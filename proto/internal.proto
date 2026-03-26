@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package fluxa.internal.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+service JobAdmin {
+  rpc EnqueueExport(EnqueueExportRequest) returns (JobReply);
+  rpc RunDueReminderSweep(RunDueReminderSweepRequest) returns (JobReply);
+  rpc GetJobStatus(GetJobStatusRequest) returns (JobReply);
+}
+
+service TaskRead {
+  rpc GetTaskSnapshot(GetTaskSnapshotRequest) returns (TaskReply);
+  rpc ListTaskSummaries(ListTaskSummariesRequest) returns (TaskListReply);
+}
+
+message EnqueueExportRequest {
+  string tenant_id = 1;
+  string requested_by = 2;
+  string status = 3;
+  string priority = 4;
+  string assignee_id = 5;
+  string due_before = 6;
+  string due_after = 7;
+  string updated_after = 8;
+  string q = 9;
+}
+
+message RunDueReminderSweepRequest {
+  string tenant_id = 1;
+}
+
+message GetJobStatusRequest {
+  string job_id = 1;
+}
+
+message JobReply {
+  string job_id = 1;
+  string tenant_id = 2;
+  string job_type = 3;
+  string status = 4;
+  uint32 attempts = 5;
+  uint32 max_attempts = 6;
+  string last_error = 7;
+  google.protobuf.Struct payload = 8;
+  google.protobuf.Struct result_payload = 9;
+  google.protobuf.Timestamp scheduled_at = 10;
+  google.protobuf.Timestamp started_at = 11;
+  google.protobuf.Timestamp finished_at = 12;
+}
+
+message GetTaskSnapshotRequest {
+  string tenant_id = 1;
+  string task_id = 2;
+}
+
+message ListTaskSummariesRequest {
+  string tenant_id = 1;
+  uint32 limit = 2;
+  string cursor = 3;
+  string status = 4;
+  string priority = 5;
+  string assignee_id = 6;
+  string due_before = 7;
+  string due_after = 8;
+  string updated_after = 9;
+  string q = 10;
+}
+
+message TaskReply {
+  string id = 1;
+  string tenant_id = 2;
+  string title = 3;
+  string description = 4;
+  string status = 5;
+  string priority = 6;
+  string assignee_id = 7;
+  string created_by = 8;
+  string updated_by = 9;
+  google.protobuf.Timestamp due_at = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message TaskListReply {
+  repeated TaskReply tasks = 1;
+  string next_cursor = 2;
+}
