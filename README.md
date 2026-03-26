@@ -55,7 +55,9 @@ Important local ports:
 - REST API: `http://127.0.0.1:8080`
 - gRPC: `127.0.0.1:50051`
 - PostgreSQL: `127.0.0.1:5432`
-- Redis: `127.0.0.1:6379`
+- Redis: `127.0.0.1:6380` by default
+
+Set `REDIS_HOST_PORT` before `docker compose up --build` if you want a different published Redis port.
 
 The compose file uses a development-only JWT secret and local database credentials. Override them before using the stack outside local development.
 
