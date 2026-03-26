@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fluxa
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fluxa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      APP_MODE: api
+      HTTP_ADDR: 0.0.0.0:8080
+      GRPC_ADDR: 0.0.0.0:50051
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/fluxa
+      REDIS_URL: redis://redis/
+      JWT_SECRET: local-development-secret-local-development
+      CORS_ALLOW_ORIGIN: "*"
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["fluxa-backend", "--mode", "worker"]
+    environment:
+      APP_MODE: worker
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/fluxa
+      REDIS_URL: redis://redis/
+      JWT_SECRET: local-development-secret-local-development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:

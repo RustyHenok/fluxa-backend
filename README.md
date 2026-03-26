@@ -42,6 +42,23 @@ cargo run -- --mode all
 
 Use `--mode api` to run only the HTTP and gRPC servers, or `--mode worker` to run just the background worker.
 
+## Run with Docker Compose
+
+Bring up PostgreSQL, Redis, the API, and the worker as separate services:
+
+```bash
+docker compose up --build
+```
+
+Important local ports:
+
+- REST API: `http://127.0.0.1:8080`
+- gRPC: `127.0.0.1:50051`
+- PostgreSQL: `127.0.0.1:5432`
+- Redis: `127.0.0.1:6379`
+
+The compose file uses a development-only JWT secret and local database credentials. Override them before using the stack outside local development.
+
 ## gRPC services
 
 - `fluxa.internal.v1.JobAdmin`
