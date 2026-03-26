@@ -42,8 +42,8 @@ services:
       JWT_SECRET: local-development-secret-local-development
       CORS_ALLOW_ORIGIN: "*"
     ports:
-      - "8080:8080"
-      - "50051:50051"
+      - "${HTTP_HOST_PORT:-18080}:8080"
+      - "${GRPC_HOST_PORT:-15051}:50051"
     depends_on:
       postgres:
         condition: service_healthy
