@@ -8,6 +8,7 @@ pub mod grpc;
 pub mod http;
 pub mod jobs;
 pub mod pagination;
+pub mod services;
 pub mod state;
 
 use std::sync::Arc;

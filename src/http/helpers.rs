@@ -5,13 +5,12 @@ use axum::extract::{ConnectInfo, Request};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
 use crate::cache::IdempotencyState;
-use crate::domain::MembershipRecord;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -45,38 +44,13 @@ pub(super) fn validate_password(password: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub(super) async fn resolve_membership(
-    state: &AppState,
-    user_id: Uuid,
-    tenant_id: Option<Uuid>,
-) -> AppResult<MembershipRecord> {
-    match tenant_id {
-        Some(tenant_id) => state
-            .db
-            .get_membership(user_id, tenant_id)
-            .await?
-            .ok_or_else(|| AppError::Unauthorized("membership not found".into())),
-        None => state
-            .db
-            .get_default_membership(user_id)
-            .await?
-            .ok_or_else(|| AppError::Unauthorized("membership not found".into())),
-    }
-}
-
-pub(super) fn refresh_expiry(state: &AppState) -> AppResult<DateTime<Utc>> {
-    let ttl = ChronoDuration::from_std(state.config.refresh_token_ttl())
-        .map_err(|error| AppError::internal(format!("invalid refresh token ttl: {error}")))?;
-    Ok(Utc::now() + ttl)
+pub(super) fn normalize_optional_choice(value: Option<String>) -> Option<String> {
+    value.map(|value| value.trim().to_ascii_lowercase())
 }
 
 pub(super) fn parse_uuid(value: &str, label: &str) -> AppResult<Uuid> {
     Uuid::parse_str(value)
         .map_err(|error| AppError::Unauthorized(format!("invalid {label}: {error}")))
-}
-
-pub(super) fn normalize_optional_choice(value: Option<String>) -> Option<String> {
-    value.map(|value| value.trim().to_ascii_lowercase())
 }
 
 pub(super) fn ensure_task_write_role(role: &str) -> AppResult<()> {

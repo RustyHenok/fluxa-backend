@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::domain::{BackgroundJobRecord, TaskFilters, TaskRecord};
 use crate::error::{AppError, AppResult};
 use crate::pagination::Cursor;
+use crate::services::{jobs as jobs_service, tasks as task_service};
 use crate::state::AppState;
 
 pub mod proto {
@@ -70,25 +71,7 @@ impl JobAdmin for JobAdminService {
             option_string(payload.q),
         )?;
 
-        let job = self
-            .state
-            .db
-            .create_job(
-                Some(tenant_id),
-                "task_export",
-                json!({
-                    "tenant_id": tenant_id,
-                    "requested_by": requested_by,
-                    "filters": filters.export_payload(),
-                }),
-                self.state.config.max_job_attempts,
-            )
-            .await
-            .map_err(status_from_error)?;
-
-        self.state
-            .cache
-            .enqueue_job(job.id)
+        let job = jobs_service::create_export_job(&self.state, tenant_id, requested_by, &filters)
             .await
             .map_err(status_from_error)?;
 
@@ -101,10 +84,7 @@ impl JobAdmin for JobAdminService {
     ) -> Result<Response<JobReply>, Status> {
         let payload = request.into_inner();
         let tenant_id = option_uuid(payload.tenant_id)?;
-        let maybe_job = self
-            .state
-            .db
-            .ensure_due_reminder_job(tenant_id, self.state.config.max_job_attempts)
+        let maybe_job = jobs_service::enqueue_due_reminder_sweep(&self.state, tenant_id)
             .await
             .map_err(status_from_error)?;
 
@@ -116,13 +96,6 @@ impl JobAdmin for JobAdminService {
                 ));
             }
         };
-
-        self.state
-            .cache
-            .enqueue_job(job.id)
-            .await
-            .map_err(status_from_error)?;
-
         Ok(Response::new(job_to_proto(&job)))
     }
 
@@ -131,10 +104,7 @@ impl JobAdmin for JobAdminService {
         request: Request<GetJobStatusRequest>,
     ) -> Result<Response<JobReply>, Status> {
         let job_id = parse_uuid(&request.into_inner().job_id, "job_id")?;
-        let job = self
-            .state
-            .db
-            .get_job(job_id)
+        let job = jobs_service::get_job(&self.state, job_id)
             .await
             .map_err(status_from_error)?
             .ok_or_else(|| Status::not_found("job not found"))?;
@@ -152,13 +122,9 @@ impl TaskRead for TaskReadService {
         let payload = request.into_inner();
         let tenant_id = parse_uuid(&payload.tenant_id, "tenant_id")?;
         let task_id = parse_uuid(&payload.task_id, "task_id")?;
-        let task = self
-            .state
-            .db
-            .get_task(tenant_id, task_id)
+        let task = task_service::get_task(&self.state, tenant_id, task_id)
             .await
-            .map_err(status_from_error)?
-            .ok_or_else(|| Status::not_found("task not found"))?;
+            .map_err(status_from_error)?;
 
         Ok(Response::new(task_to_proto(&task)))
     }
@@ -184,12 +150,10 @@ impl TaskRead for TaskReadService {
             option_string(payload.q),
         )?;
 
-        let result = self
-            .state
-            .db
-            .list_tasks(tenant_id, &filters, cursor.as_ref(), limit)
-            .await
-            .map_err(status_from_error)?;
+        let result =
+            task_service::list_tasks(&self.state, tenant_id, &filters, cursor.as_ref(), limit)
+                .await
+                .map_err(status_from_error)?;
         let next_cursor = result
             .next_cursor
             .map(|cursor| cursor.encode())
