@@ -73,6 +73,14 @@ The script checks health and readiness, registers a tenant owner, exercises auth
 
 It also waits for the API to become ready, checks the standard error envelope on unauthorized requests, and confirms the Prometheus metrics endpoint is emitting request counters.
 
+For the deeper Docker-backed integration suite, run:
+
+```bash
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/fluxa \
+TEST_REDIS_URL=redis://127.0.0.1:16379/ \
+cargo test --test stack_contracts -- --ignored --nocapture
+```
+
 ## gRPC services
 
 - `fluxa.internal.v1.JobAdmin`
