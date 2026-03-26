@@ -19,7 +19,7 @@ metrics-exporter-prometheus = "0.15"
 once_cell = "1.21"
 prost = "0.13"
 prost-types = "0.13"
-redis = { version = "0.25", features = ["aio", "connection-manager", "tokio-comp"] }
+redis = { version = "0.32.7", features = ["aio", "connection-manager", "tokio-comp"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sqlx = { version = "0.8", default-features = false, features = ["chrono", "json", "macros", "migrate", "postgres", "runtime-tokio-rustls", "uuid"] }
