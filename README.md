@@ -61,6 +61,16 @@ Set `HTTP_HOST_PORT`, `GRPC_HOST_PORT`, or `REDIS_HOST_PORT` before `docker comp
 
 The compose file uses a development-only JWT secret and local database credentials. Override them before using the stack outside local development.
 
+## Smoke test
+
+Run the end-to-end smoke test after the stack is up:
+
+```bash
+./scripts/smoke_test.sh
+```
+
+The script checks health and readiness, registers a tenant owner, exercises authenticated task CRUD paths, verifies task create idempotency, waits for an export job to complete, and validates refresh plus logout. Set `BASE=http://127.0.0.1:18080` explicitly if you changed the published API port.
+
 ## gRPC services
 
 - `fluxa.internal.v1.JobAdmin`
