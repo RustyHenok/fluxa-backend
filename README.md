@@ -71,6 +71,8 @@ Run the end-to-end smoke test after the stack is up:
 
 The script checks health and readiness, registers a tenant owner, exercises authenticated task CRUD paths, verifies task create idempotency, waits for an export job to complete, and validates refresh plus logout. Set `BASE=http://127.0.0.1:18080` explicitly if you changed the published API port.
 
+It also waits for the API to become ready, checks the standard error envelope on unauthorized requests, and confirms the Prometheus metrics endpoint is emitting request counters.
+
 ## gRPC services
 
 - `fluxa.internal.v1.JobAdmin`

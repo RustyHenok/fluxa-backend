@@ -4,6 +4,7 @@ set -euo pipefail
 BASE="${BASE:-http://127.0.0.1:18080}"
 PASSWORD="${PASSWORD:-supersecret123}"
 TENANT_NAME="${TENANT_NAME:-Smoke Tenant}"
+SMOKE_MAX_WAIT_SECONDS="${SMOKE_MAX_WAIT_SECONDS:-60}"
 EMAIL="smoke-$(date +%s)-$RANDOM@example.com"
 
 require_cmd() {
@@ -22,15 +23,57 @@ fail() {
   exit 1
 }
 
+capture_http() {
+  local method="$1"
+  local url="$2"
+  local body_file
+  body_file="$(mktemp)"
+
+  shift 2
+
+  HTTP_STATUS="$(
+    curl -sS -o "$body_file" -w '%{http_code}' -X "$method" "$url" "$@"
+  )"
+  HTTP_BODY="$(cat "$body_file")"
+  rm -f "$body_file"
+}
+
+wait_for_api() {
+  local start
+  start="$(date +%s)"
+
+  while true; do
+    local now
+    now="$(date +%s)"
+    if (( now - start >= SMOKE_MAX_WAIT_SECONDS )); then
+      fail "API did not become healthy within ${SMOKE_MAX_WAIT_SECONDS}s"
+    fi
+
+    HEALTH_JSON="$(curl -sS "$BASE/healthz" 2>/dev/null || true)"
+    READY_JSON="$(curl -sS "$BASE/readyz" 2>/dev/null || true)"
+
+    if [[ "$(jq -r '.status // empty' <<<"$HEALTH_JSON")" == "ok" ]] \
+      && [[ "$(jq -r '.status // empty' <<<"$READY_JSON")" == "ready" ]]; then
+      return 0
+    fi
+
+    sleep 2
+  done
+}
+
 require_cmd curl
 require_cmd jq
 
 step "Health checks"
-HEALTH_JSON="$(curl -sS "$BASE/healthz")"
-READY_JSON="$(curl -sS "$BASE/readyz")"
+wait_for_api
 
 [[ "$(jq -r '.status' <<<"$HEALTH_JSON")" == "ok" ]] || fail "/healthz did not return ok"
 [[ "$(jq -r '.status' <<<"$READY_JSON")" == "ready" ]] || fail "/readyz did not return ready"
+
+step "Verify unauthorized error envelope"
+capture_http GET "$BASE/v1/me"
+[[ "$HTTP_STATUS" == "401" ]] || fail "unauthenticated /v1/me did not return 401"
+[[ "$(jq -r '.error.code' <<<"$HTTP_BODY")" == "unauthorized" ]] || fail "unauthenticated /v1/me did not return the expected error envelope"
 
 step "Register tenant owner"
 AUTH_JSON="$(
@@ -125,6 +168,16 @@ LOGOUT_STATUS="$(
     -d "{\"refresh_token\":\"$NEXT_REFRESH_TOKEN\"}"
 )"
 [[ "$LOGOUT_STATUS" == "204" ]] || fail "logout did not return 204"
+
+step "Verify revoked refresh token and metrics"
+capture_http POST "$BASE/v1/auth/refresh" \
+  -H 'content-type: application/json' \
+  -d "{\"refresh_token\":\"$NEXT_REFRESH_TOKEN\"}"
+[[ "$HTTP_STATUS" == "401" ]] || fail "revoked refresh token did not return 401"
+[[ "$(jq -r '.error.code' <<<"$HTTP_BODY")" == "unauthorized" ]] || fail "revoked refresh token did not return the expected error envelope"
+
+METRICS_TEXT="$(curl -sS "$BASE/metrics")"
+grep -q 'http_requests_total' <<<"$METRICS_TEXT" || fail "/metrics did not include http_requests_total"
 
 printf '\nSmoke test passed for %s\n' "$BASE"
 printf 'tenant_id=%s\n' "$TENANT_ID"

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install smoke test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run unit tests
+        run: cargo test
+
+      - name: Start local stack
+        run: docker compose up --build -d
+
+      - name: Run end-to-end smoke test
+        env:
+          BASE: http://127.0.0.1:18080
+          SMOKE_MAX_WAIT_SECONDS: 90
+        run: ./scripts/smoke_test.sh
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs --no-color api worker postgres redis
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v --remove-orphans
