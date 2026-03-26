@@ -55,7 +55,7 @@ Important local ports:
 - REST API: `http://127.0.0.1:8080`
 - gRPC: `127.0.0.1:50051`
 - PostgreSQL: `127.0.0.1:5432`
-- Redis: `127.0.0.1:6380` by default
+- Redis: `127.0.0.1:16379` by default
 
 Set `REDIS_HOST_PORT` before `docker compose up --build` if you want a different published Redis port.
 
