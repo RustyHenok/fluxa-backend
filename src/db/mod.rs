@@ -4,6 +4,8 @@ mod refresh_tokens;
 mod tasks;
 mod users;
 
+use std::time::Duration;
+
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
@@ -21,6 +23,7 @@ impl Database {
     pub async fn connect(config: &SharedConfig) -> AppResult<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(config.database_max_connections)
+            .acquire_timeout(Duration::from_secs(5))
             .connect(&config.database_url)
             .await?;
 

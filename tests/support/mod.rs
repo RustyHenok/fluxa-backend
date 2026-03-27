@@ -5,9 +5,11 @@ use std::time::{Duration, Instant};
 
 use fluxa_backend::grpc::proto::job_admin_client::JobAdminClient;
 use fluxa_backend::grpc::proto::{GetJobStatusRequest, JobReply};
+use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde_json::{Value, json};
-use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+use tokio::sync::{Mutex, MutexGuard};
 use tokio::time::sleep;
 use tonic::transport::Channel;
 use uuid::Uuid;
@@ -15,6 +17,11 @@ use uuid::Uuid;
 const DEFAULT_TEST_DATABASE_URL: &str = "postgres://postgres:postgres@127.0.0.1:5432/fluxa";
 const DEFAULT_TEST_REDIS_URL: &str = "redis://127.0.0.1:16379/";
 const TEST_JWT_SECRET: &str = "integration-test-secret-integration-test";
+static STACK_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+pub async fn stack_test_guard() -> MutexGuard<'static, ()> {
+    STACK_TEST_MUTEX.lock().await
+}
 
 pub struct TestServer {
     child: Child,
@@ -53,7 +60,7 @@ impl TestServer {
             .env("GRPC_ADDR", format!("127.0.0.1:{grpc_port}"))
             .env("STARTUP_MAX_RETRIES", "10")
             .env("STARTUP_RETRY_DELAY_MS", "500")
-            .env("DATABASE_MAX_CONNECTIONS", "2")
+            .env("DATABASE_MAX_CONNECTIONS", "4")
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
             .spawn()
@@ -134,7 +141,10 @@ pub struct RegisteredUser {
 }
 
 pub async fn add_membership(user_id: &str, tenant_id: &str, role: &str) {
-    let pool = PgPool::connect(&test_database_url())
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&test_database_url())
         .await
         .expect("test database should be reachable");
 

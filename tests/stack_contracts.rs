@@ -9,13 +9,14 @@ use serde_json::{Value, json};
 mod support;
 
 use support::{
-    TestServer, add_membership, create_task, poll_job_status, register_user,
+    TestServer, add_membership, create_task, poll_job_status, register_user, stack_test_guard,
     wait_for_rest_job_completion,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires local Postgres and Redis services"]
 async fn rest_api_enforces_tenant_isolation() {
+    let _guard = stack_test_guard().await;
     let server = TestServer::start().await;
     let client = Client::new();
 
@@ -279,6 +280,7 @@ async fn rest_api_enforces_tenant_isolation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires local Postgres and Redis services"]
 async fn grpc_contracts_expose_tasks_and_jobs() {
+    let _guard = stack_test_guard().await;
     let server = TestServer::start().await;
     let client = Client::new();
     let owner = register_user(&client, &server.http_base, "grpc").await;
