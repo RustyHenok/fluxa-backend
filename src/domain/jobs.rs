@@ -1,0 +1,64 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sqlx::FromRow;
+use uuid::Uuid;
+
+pub const JOB_STATUS_QUEUED: &str = "queued";
+pub const JOB_STATUS_RUNNING: &str = "running";
+pub const JOB_STATUS_COMPLETED: &str = "completed";
+pub const JOB_STATUS_DEAD_LETTER: &str = "dead_letter";
+
+pub const JOB_TYPE_TASK_EXPORT: &str = "task_export";
+pub const JOB_TYPE_DUE_REMINDER_SWEEP: &str = "due_reminder_sweep";
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct BackgroundJobRecord {
+    pub id: Uuid,
+    pub tenant_id: Option<Uuid>,
+    pub job_type: String,
+    pub status: String,
+    pub attempts: i32,
+    pub max_attempts: i32,
+    pub scheduled_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub payload: Value,
+    pub result_payload: Option<Value>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobResponse {
+    pub id: Uuid,
+    pub tenant_id: Option<Uuid>,
+    pub job_type: String,
+    pub status: String,
+    pub attempts: i32,
+    pub max_attempts: i32,
+    pub scheduled_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub payload: Value,
+    pub result_payload: Option<Value>,
+    pub last_error: Option<String>,
+}
+
+impl From<&BackgroundJobRecord> for JobResponse {
+    fn from(value: &BackgroundJobRecord) -> Self {
+        Self {
+            id: value.id,
+            tenant_id: value.tenant_id,
+            job_type: value.job_type.clone(),
+            status: value.status.clone(),
+            attempts: value.attempts,
+            max_attempts: value.max_attempts,
+            scheduled_at: value.scheduled_at,
+            started_at: value.started_at,
+            finished_at: value.finished_at,
+            payload: value.payload.clone(),
+            result_payload: value.result_payload.clone(),
+            last_error: value.last_error.clone(),
+        }
+    }
+}
