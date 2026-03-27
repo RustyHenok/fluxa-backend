@@ -4,10 +4,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::domain::{
-    BackgroundJobRecord, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_TASK_EXPORT, JobResponse,
-    TaskFilters, TaskResponse,
-};
+use crate::domain::{BackgroundJobRecord, JobResponse, JobType, TaskFilters, TaskResponse};
 use crate::error::{AppError, AppResult};
 use crate::services::tasks;
 use crate::state::AppState;
@@ -34,7 +31,7 @@ pub async fn create_export_job(
         .db
         .create_job(
             Some(tenant_id),
-            JOB_TYPE_TASK_EXPORT,
+            JobType::TaskExport.as_str(),
             json!({
                 "tenant_id": tenant_id,
                 "requested_by": requested_by,
@@ -98,10 +95,9 @@ pub async fn process_job(state: &AppState, job_id: Uuid) -> AppResult<()> {
         return Ok(());
     };
 
-    let outcome = match job.job_type.as_str() {
-        JOB_TYPE_TASK_EXPORT => process_export_job(state, &job).await,
-        JOB_TYPE_DUE_REMINDER_SWEEP => process_due_reminder_job(state, &job).await,
-        other => Err(AppError::internal(format!("unsupported job type: {other}"))),
+    let outcome = match job.parsed_job_type()? {
+        JobType::TaskExport => process_export_job(state, &job).await,
+        JobType::DueReminderSweep => process_due_reminder_job(state, &job).await,
     };
 
     match outcome {
@@ -119,7 +115,7 @@ pub async fn process_job(state: &AppState, job_id: Uuid) -> AppResult<()> {
 }
 
 pub fn job_response_value(job: &BackgroundJobRecord) -> AppResult<Value> {
-    serde_json::to_value(JobResponse::from(job))
+    serde_json::to_value(JobResponse::try_from(job)?)
         .map_err(|error| AppError::internal(format!("failed to serialize job: {error}")))
 }
 
@@ -136,7 +132,10 @@ async fn process_export_job(
         "requested_by": payload.requested_by,
         "generated_at": Utc::now(),
         "task_count": tasks.len(),
-        "tasks": tasks.iter().map(TaskResponse::from).collect::<Vec<_>>(),
+        "tasks": tasks
+            .iter()
+            .map(TaskResponse::try_from)
+            .collect::<AppResult<Vec<_>>>()?,
     }))
 }
 

@@ -40,7 +40,11 @@ pub async fn list_tasks_cached(
 
     let tasks = list_tasks(state, tenant_id, filters, cursor, limit).await?;
     let response = TaskPage {
-        data: tasks.tasks.iter().map(TaskResponse::from).collect(),
+        data: tasks
+            .tasks
+            .iter()
+            .map(TaskResponse::try_from)
+            .collect::<AppResult<Vec<_>>>()?,
         next_cursor: tasks.next_cursor.map(|value| value.encode()).transpose()?,
     };
 
@@ -67,7 +71,7 @@ pub async fn get_task_cached(
     }
 
     let task = get_task(state, tenant_id, task_id).await?;
-    let response = TaskResponse::from(&task);
+    let response = TaskResponse::try_from(&task)?;
     state
         .cache
         .set_json(&cache_key, &response, state.config.cache_ttl())

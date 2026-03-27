@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use std::fmt;
+use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -9,10 +11,50 @@ pub const ROLE_OWNER: &str = "owner";
 pub const ROLE_ADMIN: &str = "admin";
 pub const ROLE_MEMBER: &str = "member";
 
-pub fn validate_role(value: &str) -> AppResult<&str> {
-    match value {
-        ROLE_OWNER | ROLE_ADMIN | ROLE_MEMBER => Ok(value),
-        _ => Err(AppError::Validation(format!("unsupported role: {value}"))),
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipRole {
+    Owner,
+    Admin,
+    Member,
+}
+
+impl MembershipRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => ROLE_OWNER,
+            Self::Admin => ROLE_ADMIN,
+            Self::Member => ROLE_MEMBER,
+        }
+    }
+}
+
+impl fmt::Display for MembershipRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for MembershipRole {
+    type Err = AppError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            ROLE_OWNER => Ok(Self::Owner),
+            ROLE_ADMIN => Ok(Self::Admin),
+            ROLE_MEMBER => Ok(Self::Member),
+            _ => Err(AppError::Validation(format!("unsupported role: {value}"))),
+        }
+    }
+}
+
+pub fn validate_role(value: &str) -> AppResult<MembershipRole> {
+    value.parse()
+}
+
+impl MembershipRecord {
+    pub fn parsed_role(&self) -> AppResult<MembershipRole> {
+        self.role.parse()
     }
 }
 
@@ -72,17 +114,19 @@ impl From<&UserRecord> for UserResponse {
 pub struct TenantMembershipResponse {
     pub tenant_id: Uuid,
     pub tenant_name: String,
-    pub role: String,
+    pub role: MembershipRole,
     pub created_at: DateTime<Utc>,
 }
 
-impl From<&MembershipRecord> for TenantMembershipResponse {
-    fn from(value: &MembershipRecord) -> Self {
-        Self {
+impl TryFrom<&MembershipRecord> for TenantMembershipResponse {
+    type Error = AppError;
+
+    fn try_from(value: &MembershipRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             tenant_id: value.tenant_id,
             tenant_name: value.tenant_name.clone(),
-            role: value.role.clone(),
+            role: value.parsed_role()?,
             created_at: value.created_at,
-        }
+        })
     }
 }

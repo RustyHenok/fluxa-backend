@@ -59,7 +59,7 @@ pub(super) async fn protected_middleware(
     let auth_user = AuthenticatedUser {
         user_id,
         tenant_id,
-        role: membership.role.clone(),
+        role: membership.parsed_role()?,
     };
     request.extensions_mut().insert(auth_user.clone());
 

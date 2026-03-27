@@ -12,6 +12,7 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 use uuid::Uuid;
 
+use crate::domain::MembershipRole;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -24,7 +25,7 @@ mod middleware;
 pub struct AuthenticatedUser {
     pub user_id: Uuid,
     pub tenant_id: Uuid,
-    pub role: String,
+    pub role: MembershipRole,
 }
 
 pub async fn serve(

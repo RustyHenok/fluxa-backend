@@ -4,7 +4,10 @@ use sqlx::{Encode, Postgres, QueryBuilder, Type};
 use uuid::Uuid;
 
 use super::Database;
-use crate::domain::{CreateTaskInput, PaginatedTasks, TaskFilters, TaskRecord, UpdateTaskInput};
+use crate::domain::{
+    CreateTaskInput, PaginatedTasks, TaskFilters, TaskPriority, TaskRecord, TaskStatus,
+    UpdateTaskInput,
+};
 use crate::error::{AppError, AppResult};
 use crate::pagination::Cursor;
 
@@ -42,8 +45,8 @@ impl Database {
         .bind(tenant_id)
         .bind(input.title.trim())
         .bind(input.description.clone())
-        .bind(input.status.unwrap_or_else(|| "open".into()))
-        .bind(input.priority.unwrap_or_else(|| "medium".into()))
+        .bind(input.status.unwrap_or(TaskStatus::Open).as_str())
+        .bind(input.priority.unwrap_or(TaskPriority::Medium).as_str())
         .bind(input.assignee_id)
         .bind(input.due_at)
         .bind(actor_id)
@@ -156,12 +159,22 @@ impl Database {
         }
 
         if let Some(status) = input.status.as_ref() {
-            push_update_assignment(&mut builder, &mut needs_separator, "status", status);
+            push_update_assignment(
+                &mut builder,
+                &mut needs_separator,
+                "status",
+                status.as_str(),
+            );
             changed += 1;
         }
 
         if let Some(priority) = input.priority.as_ref() {
-            push_update_assignment(&mut builder, &mut needs_separator, "priority", priority);
+            push_update_assignment(
+                &mut builder,
+                &mut needs_separator,
+                "priority",
+                priority.as_str(),
+            );
             changed += 1;
         }
 
@@ -375,12 +388,12 @@ fn apply_task_filters<'a>(
 ) {
     if let Some(status) = filters.status.as_ref() {
         builder.push(" AND status = ");
-        builder.push_bind(status);
+        builder.push_bind(status.as_str());
     }
 
     if let Some(priority) = filters.priority.as_ref() {
         builder.push(" AND priority = ");
-        builder.push_bind(priority);
+        builder.push_bind(priority.as_str());
     }
 
     if let Some(assignee_id) = filters.assignee_id {

@@ -11,6 +11,7 @@ use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
 use crate::cache::IdempotencyState;
+use crate::domain::MembershipRole;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -53,19 +54,16 @@ pub(super) fn parse_uuid(value: &str, label: &str) -> AppResult<Uuid> {
         .map_err(|error| AppError::Unauthorized(format!("invalid {label}: {error}")))
 }
 
-pub(super) fn ensure_task_write_role(role: &str) -> AppResult<()> {
+pub(super) fn ensure_task_write_role(role: MembershipRole) -> AppResult<()> {
     match role {
-        "owner" | "admin" | "member" => Ok(()),
-        _ => Err(AppError::Forbidden(
-            "role is not allowed to modify tasks".into(),
-        )),
+        MembershipRole::Owner | MembershipRole::Admin | MembershipRole::Member => Ok(()),
     }
 }
 
-pub(super) fn ensure_admin_role(role: &str) -> AppResult<()> {
+pub(super) fn ensure_admin_role(role: MembershipRole) -> AppResult<()> {
     match role {
-        "owner" | "admin" => Ok(()),
-        _ => Err(AppError::Forbidden(
+        MembershipRole::Owner | MembershipRole::Admin => Ok(()),
+        MembershipRole::Member => Err(AppError::Forbidden(
             "owner or admin role required for this action".into(),
         )),
     }

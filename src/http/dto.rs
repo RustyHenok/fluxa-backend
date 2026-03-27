@@ -2,7 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::{TaskFilters, TaskResponse, TenantMembershipResponse, UserResponse};
+use crate::domain::{
+    TaskFilters, TaskResponse, TenantMembershipResponse, UserResponse, validate_task_priority,
+    validate_task_status,
+};
 use crate::error::AppResult;
 
 use super::helpers::{normalize_optional_choice, parse_optional_datetime};
@@ -105,8 +108,12 @@ pub(super) struct HealthResponse<'a> {
 impl TaskListQuery {
     pub(super) fn into_filters(self) -> AppResult<TaskFilters> {
         TaskFilters {
-            status: normalize_optional_choice(self.status),
-            priority: normalize_optional_choice(self.priority),
+            status: normalize_optional_choice(self.status)
+                .map(|value| validate_task_status(&value))
+                .transpose()?,
+            priority: normalize_optional_choice(self.priority)
+                .map(|value| validate_task_priority(&value))
+                .transpose()?,
             assignee_id: self.assignee_id,
             due_before: parse_optional_datetime(self.due_before, "due_before")?,
             due_after: parse_optional_datetime(self.due_after, "due_after")?,
@@ -120,8 +127,12 @@ impl TaskListQuery {
 impl ExportRequest {
     pub(super) fn into_filters(self) -> AppResult<TaskFilters> {
         TaskFilters {
-            status: normalize_optional_choice(self.status),
-            priority: normalize_optional_choice(self.priority),
+            status: normalize_optional_choice(self.status)
+                .map(|value| validate_task_status(&value))
+                .transpose()?,
+            priority: normalize_optional_choice(self.priority)
+                .map(|value| validate_task_priority(&value))
+                .transpose()?,
             assignee_id: self.assignee_id,
             due_before: parse_optional_datetime(self.due_before, "due_before")?,
             due_after: parse_optional_datetime(self.due_after, "due_after")?,

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use tonic::Status;
 use uuid::Uuid;
 
-use crate::domain::TaskFilters;
+use crate::domain::{TaskFilters, validate_task_priority, validate_task_status};
 use crate::error::AppError;
 
 pub(super) fn filters_from_parts(
@@ -15,8 +15,14 @@ pub(super) fn filters_from_parts(
     q: Option<String>,
 ) -> Result<TaskFilters, Status> {
     TaskFilters {
-        status: option_string(status).map(|value| value.to_ascii_lowercase()),
-        priority: option_string(priority).map(|value| value.to_ascii_lowercase()),
+        status: option_string(status)
+            .map(|value| validate_task_status(&value.to_ascii_lowercase()))
+            .transpose()
+            .map_err(status_from_error)?,
+        priority: option_string(priority)
+            .map(|value| validate_task_priority(&value.to_ascii_lowercase()))
+            .transpose()
+            .map_err(status_from_error)?,
         assignee_id,
         due_before,
         due_after,

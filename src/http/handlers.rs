@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::cache::StoredResponse;
 use crate::domain::{
     CreateTaskInput, JobResponse, TaskResponse, TenantMembershipResponse, UpdateTaskInput,
-    UserResponse,
+    UserResponse, validate_task_priority, validate_task_status,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::Cursor;
@@ -63,7 +63,7 @@ pub(super) async fn register(
             refresh_token: session.refresh_token,
             expires_in_seconds: session.expires_in_seconds,
             user: UserResponse::from(&session.user),
-            active_tenant: TenantMembershipResponse::from(&session.membership),
+            active_tenant: TenantMembershipResponse::try_from(&session.membership)?,
         }),
     ))
 }
@@ -80,7 +80,7 @@ pub(super) async fn login(
         refresh_token: session.refresh_token,
         expires_in_seconds: session.expires_in_seconds,
         user: UserResponse::from(&session.user),
-        active_tenant: TenantMembershipResponse::from(&session.membership),
+        active_tenant: TenantMembershipResponse::try_from(&session.membership)?,
     }))
 }
 
@@ -95,7 +95,7 @@ pub(super) async fn refresh(
         refresh_token: session.refresh_token,
         expires_in_seconds: session.expires_in_seconds,
         user: UserResponse::from(&session.user),
-        active_tenant: TenantMembershipResponse::from(&session.membership),
+        active_tenant: TenantMembershipResponse::try_from(&session.membership)?,
     }))
 }
 
@@ -115,7 +115,7 @@ pub(super) async fn me(
 
     Ok(Json(MeResponse {
         user: UserResponse::from(&profile.user),
-        active_tenant: TenantMembershipResponse::from(&profile.membership),
+        active_tenant: TenantMembershipResponse::try_from(&profile.membership)?,
     }))
 }
 
@@ -127,8 +127,8 @@ pub(super) async fn list_my_tenants(
     Ok(Json(
         memberships
             .iter()
-            .map(TenantMembershipResponse::from)
-            .collect(),
+            .map(TenantMembershipResponse::try_from)
+            .collect::<AppResult<Vec<_>>>()?,
     ))
 }
 
@@ -162,7 +162,7 @@ pub(super) async fn create_task(
     headers: HeaderMap,
     Json(payload): Json<TaskPayload>,
 ) -> AppResult<(StatusCode, Json<Value>)> {
-    ensure_task_write_role(&user.role)?;
+    ensure_task_write_role(user.role)?;
     let idempotency_key = required_idempotency_key(&headers)?;
     let cache_key = state
         .cache
@@ -188,8 +188,12 @@ pub(super) async fn create_task(
     let input = CreateTaskInput {
         title: payload.title,
         description: payload.description,
-        status: normalize_optional_choice(payload.status),
-        priority: normalize_optional_choice(payload.priority),
+        status: normalize_optional_choice(payload.status)
+            .map(|value| validate_task_status(&value))
+            .transpose()?,
+        priority: normalize_optional_choice(payload.priority)
+            .map(|value| validate_task_priority(&value))
+            .transpose()?,
         assignee_id: payload.assignee_id,
         due_at: payload.due_at,
     }
@@ -197,7 +201,7 @@ pub(super) async fn create_task(
 
     match task_service::create_task(&state, user.tenant_id, user.user_id, input).await {
         Ok(task) => {
-            let body = serde_json::to_value(TaskResponse::from(&task)).map_err(|error| {
+            let body = serde_json::to_value(TaskResponse::try_from(&task)?).map_err(|error| {
                 AppError::internal(format!("failed to serialize task: {error}"))
             })?;
             let stored = StoredResponse {
@@ -232,12 +236,16 @@ pub(super) async fn update_task(
     Path(task_id): Path<Uuid>,
     Json(payload): Json<TaskPatchPayload>,
 ) -> AppResult<Json<TaskResponse>> {
-    ensure_task_write_role(&user.role)?;
+    ensure_task_write_role(user.role)?;
     let input = UpdateTaskInput {
         title: payload.title,
         description: payload.description,
-        status: normalize_optional_choice(payload.status),
-        priority: normalize_optional_choice(payload.priority),
+        status: normalize_optional_choice(payload.status)
+            .map(|value| validate_task_status(&value))
+            .transpose()?,
+        priority: normalize_optional_choice(payload.priority)
+            .map(|value| validate_task_priority(&value))
+            .transpose()?,
         assignee_id: payload.assignee_id,
         due_at: payload.due_at,
     }
@@ -245,7 +253,7 @@ pub(super) async fn update_task(
 
     let task =
         task_service::update_task(&state, user.tenant_id, task_id, user.user_id, input).await?;
-    Ok(Json(TaskResponse::from(&task)))
+    Ok(Json(TaskResponse::try_from(&task)?))
 }
 
 pub(super) async fn delete_task(
@@ -253,7 +261,7 @@ pub(super) async fn delete_task(
     Extension(user): Extension<AuthenticatedUser>,
     Path(task_id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
-    ensure_admin_role(&user.role)?;
+    ensure_admin_role(user.role)?;
     task_service::delete_task(&state, user.tenant_id, task_id, user.user_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -264,7 +272,7 @@ pub(super) async fn create_export(
     headers: HeaderMap,
     Json(payload): Json<ExportRequest>,
 ) -> AppResult<(StatusCode, Json<Value>)> {
-    ensure_admin_role(&user.role)?;
+    ensure_admin_role(user.role)?;
     let idempotency_key = required_idempotency_key(&headers)?;
     let cache_key = state
         .cache
@@ -318,5 +326,5 @@ pub(super) async fn get_job(
 ) -> AppResult<Json<JobResponse>> {
     let job = jobs_service::get_tenant_job(&state, job_id, user.tenant_id).await?;
 
-    Ok(Json(JobResponse::from(&job)))
+    Ok(Json(JobResponse::try_from(&job)?))
 }
