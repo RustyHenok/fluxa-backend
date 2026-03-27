@@ -78,6 +78,16 @@ The script checks health and readiness, registers a tenant owner, exercises auth
 
 It also waits for the API to become ready, checks the standard error envelope on unauthorized requests, and confirms the Prometheus metrics endpoint is emitting request counters.
 
+## OpenAPI contract
+
+Generate the checked-in OpenAPI document with:
+
+```bash
+./scripts/generate_openapi.sh
+```
+
+The generated contract is written to `openapi/fluxa-openapi.json`, and CI verifies that the committed file stays in sync with the generator.
+
 For the deeper Docker-backed integration suite, run:
 
 ```bash

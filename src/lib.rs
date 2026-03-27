@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 pub mod auth;
 pub mod cache;
 pub mod config;
@@ -7,6 +9,7 @@ pub mod error;
 pub mod grpc;
 pub mod http;
 pub mod jobs;
+pub mod openapi;
 pub mod pagination;
 pub mod services;
 pub mod state;

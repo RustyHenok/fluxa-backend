@@ -29,6 +29,12 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Generate OpenAPI spec
+        run: ./scripts/generate_openapi.sh
+
+      - name: Verify OpenAPI spec is up to date
+        run: git diff --exit-code -- openapi/fluxa-openapi.json
+
       - name: Run unit tests
         run: cargo test
 
