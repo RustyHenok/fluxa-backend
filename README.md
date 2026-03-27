@@ -88,6 +88,8 @@ Generate the checked-in OpenAPI document with:
 
 The generated contract is written to `openapi/fluxa-openapi.json`, and CI verifies that the committed file stays in sync with the generator.
 
+Frontend-facing usage notes live in `docs/frontend-contract.md`.
+
 For the deeper Docker-backed integration suite, run:
 
 ```bash
