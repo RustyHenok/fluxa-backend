@@ -9,20 +9,20 @@ use uuid::Uuid;
 
 use crate::cache::StoredResponse;
 use crate::domain::{
-    CreateTaskInput, DashboardSummary, JobResponse, TaskResponse, TenantMemberResponse,
-    TenantMembershipResponse, UpdateTaskInput, UserResponse, validate_task_priority,
-    validate_task_status,
+    CreateTaskInput, DashboardSummary, JobResponse, TaskAuditResponse, TaskResponse,
+    TenantMemberResponse, TenantMembershipResponse, UpdateTaskInput, UserResponse,
+    validate_task_priority, validate_task_status,
 };
 use crate::error::{AppError, AppResult};
-use crate::pagination::Cursor;
+use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{auth as auth_service, jobs as jobs_service, tasks as task_service};
 use crate::state::AppState;
 
 use super::AuthenticatedUser;
 use super::dto::{
     AuthResponse, ExportRequest, HealthResponse, LoginRequest, LogoutRequest, MeResponse,
-    RefreshRequest, RegisterRequest, SwitchTenantRequest, TaskListQuery, TaskListResponse,
-    TaskPatchPayload, TaskPayload,
+    RefreshRequest, RegisterRequest, SwitchTenantRequest, TaskAuditListResponse, TaskAuditQuery,
+    TaskListQuery, TaskListResponse, TaskPatchPayload, TaskPayload,
 };
 use super::helpers::{
     ensure_admin_role, ensure_task_write_role, normalize_email, normalize_optional_choice,
@@ -268,6 +268,28 @@ pub(super) async fn get_task(
 ) -> AppResult<Json<TaskResponse>> {
     let task = task_service::get_task_cached(&state, user.tenant_id, task_id).await?;
     Ok(Json(task))
+}
+
+pub(super) async fn list_task_audit(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+    Query(query): Query<TaskAuditQuery>,
+) -> AppResult<Json<TaskAuditListResponse>> {
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(AuditCursor::decode)
+        .transpose()?;
+    let page =
+        task_service::list_task_audit(&state, user.tenant_id, task_id, cursor.as_ref(), limit)
+            .await?;
+
+    Ok(Json(TaskAuditListResponse {
+        data: page.entries.iter().map(TaskAuditResponse::from).collect(),
+        next_cursor: page.next_cursor.map(|value| value.encode()).transpose()?,
+    }))
 }
 
 pub(super) async fn update_task(

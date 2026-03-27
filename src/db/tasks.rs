@@ -5,11 +5,11 @@ use uuid::Uuid;
 
 use super::Database;
 use crate::domain::{
-    CreateTaskInput, DashboardSummary, PaginatedTasks, TaskFilters, TaskPriority, TaskRecord,
-    TaskStatus, UpdateTaskInput,
+    CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TaskAuditRecord,
+    TaskFilters, TaskPriority, TaskRecord, TaskStatus, UpdateTaskInput,
 };
 use crate::error::{AppError, AppResult};
-use crate::pagination::Cursor;
+use crate::pagination::{AuditCursor, Cursor};
 
 impl Database {
     pub async fn dashboard_summary(&self, tenant_id: Uuid) -> AppResult<DashboardSummary> {
@@ -158,6 +158,57 @@ impl Database {
         };
 
         Ok(PaginatedTasks { tasks, next_cursor })
+    }
+
+    pub async fn list_task_audit(
+        &self,
+        tenant_id: Uuid,
+        task_id: Uuid,
+        cursor: Option<&AuditCursor>,
+        limit: usize,
+    ) -> AppResult<PaginatedTaskAudit> {
+        let mut builder = QueryBuilder::<Postgres>::new(
+            r#"
+            SELECT id, task_id, tenant_id, actor_user_id, event_type, payload, created_at
+            FROM task_audit_log
+            WHERE tenant_id = "#,
+        );
+        builder.push_bind(tenant_id);
+        builder.push(" AND task_id = ");
+        builder.push_bind(task_id);
+
+        if let Some(cursor) = cursor {
+            builder.push(" AND (created_at < ");
+            builder.push_bind(cursor.created_at);
+            builder.push(" OR (created_at = ");
+            builder.push_bind(cursor.created_at);
+            builder.push(" AND id < ");
+            builder.push_bind(cursor.id);
+            builder.push("))");
+        }
+
+        builder.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+        builder.push_bind((limit + 1) as i64);
+
+        let mut entries = builder
+            .build_query_as::<TaskAuditRecord>()
+            .fetch_all(&self.pool)
+            .await?;
+
+        let next_cursor = if entries.len() > limit {
+            entries.truncate(limit);
+            entries.last().map(|entry| AuditCursor {
+                created_at: entry.created_at,
+                id: entry.id,
+            })
+        } else {
+            None
+        };
+
+        Ok(PaginatedTaskAudit {
+            entries,
+            next_cursor,
+        })
     }
 
     pub async fn update_task(

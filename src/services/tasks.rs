@@ -3,11 +3,11 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::domain::{
-    CreateTaskInput, DashboardSummary, PaginatedTasks, TaskFilters, TaskRecord, TaskResponse,
-    UpdateTaskInput,
+    CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TaskFilters, TaskRecord,
+    TaskResponse, UpdateTaskInput,
 };
 use crate::error::{AppError, AppResult};
-use crate::pagination::Cursor;
+use crate::pagination::{AuditCursor, Cursor};
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +93,20 @@ pub async fn list_tasks(
 
 pub async fn dashboard_summary(state: &AppState, tenant_id: Uuid) -> AppResult<DashboardSummary> {
     state.db.dashboard_summary(tenant_id).await
+}
+
+pub async fn list_task_audit(
+    state: &AppState,
+    tenant_id: Uuid,
+    task_id: Uuid,
+    cursor: Option<&AuditCursor>,
+    limit: usize,
+) -> AppResult<PaginatedTaskAudit> {
+    get_task(state, tenant_id, task_id).await?;
+    state
+        .db
+        .list_task_audit(tenant_id, task_id, cursor, limit)
+        .await
 }
 
 pub async fn get_task(state: &AppState, tenant_id: Uuid, task_id: Uuid) -> AppResult<TaskRecord> {

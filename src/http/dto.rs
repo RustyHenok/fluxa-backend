@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::{
-    TaskFilters, TaskResponse, TenantMembershipResponse, UserResponse, validate_task_priority,
-    validate_task_status,
+    TaskAuditResponse, TaskFilters, TaskResponse, TenantMembershipResponse, UserResponse,
+    validate_task_priority, validate_task_status,
 };
 use crate::error::AppResult;
 
@@ -102,6 +102,18 @@ pub(super) struct MeResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct TaskListResponse {
     pub(super) data: Vec<TaskResponse>,
+    pub(super) next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub(super) struct TaskAuditQuery {
+    pub(super) limit: Option<usize>,
+    pub(super) cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct TaskAuditListResponse {
+    pub(super) data: Vec<TaskAuditResponse>,
     pub(super) next_cursor: Option<String>,
 }
 

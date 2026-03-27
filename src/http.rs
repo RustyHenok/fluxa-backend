@@ -77,6 +77,7 @@ fn router(state: AppState) -> AppResult<Router> {
                 .patch(handlers::update_task)
                 .delete(handlers::delete_task),
         )
+        .route("/tasks/:task_id/audit", get(handlers::list_task_audit))
         .route("/exports/tasks", post(handlers::create_export))
         .route("/jobs/:job_id", get(handlers::get_job))
         .layer(axum_middleware::from_fn_with_state(

@@ -7,7 +7,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::pagination::Cursor;
+use crate::pagination::{AuditCursor, Cursor};
 
 pub const TASK_STATUS_OPEN: &str = "open";
 pub const TASK_STATUS_IN_PROGRESS: &str = "in_progress";
@@ -214,6 +214,23 @@ pub struct PaginatedTasks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TaskAuditRecord {
+    pub id: Uuid,
+    pub task_id: Option<Uuid>,
+    pub tenant_id: Uuid,
+    pub actor_user_id: Uuid,
+    pub event_type: String,
+    pub payload: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaginatedTaskAudit {
+    pub entries: Vec<TaskAuditRecord>,
+    pub next_cursor: Option<AuditCursor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct DashboardSummary {
     pub open_task_count: i64,
     pub in_progress_task_count: i64,
@@ -238,6 +255,17 @@ pub struct TaskResponse {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskAuditResponse {
+    pub id: Uuid,
+    pub task_id: Option<Uuid>,
+    pub tenant_id: Uuid,
+    pub actor_user_id: Uuid,
+    pub event_type: String,
+    pub payload: Value,
+    pub created_at: DateTime<Utc>,
+}
+
 impl TryFrom<&TaskRecord> for TaskResponse {
     type Error = AppError;
 
@@ -256,5 +284,19 @@ impl TryFrom<&TaskRecord> for TaskResponse {
             created_at: value.created_at,
             updated_at: value.updated_at,
         })
+    }
+}
+
+impl From<&TaskAuditRecord> for TaskAuditResponse {
+    fn from(value: &TaskAuditRecord) -> Self {
+        Self {
+            id: value.id,
+            task_id: value.task_id,
+            tenant_id: value.tenant_id,
+            actor_user_id: value.actor_user_id,
+            event_type: value.event_type.clone(),
+            payload: value.payload.clone(),
+            created_at: value.created_at,
+        }
     }
 }

@@ -61,6 +61,17 @@ async fn rest_api_enforces_tenant_isolation() {
     assert_eq!(owner_a_summary["overdue_task_count"], 0);
     assert_eq!(owner_a_summary["recent_activity_count"], 0);
 
+    let cross_tenant_audit = client
+        .get(format!(
+            "{}/v1/tasks/{task_id}/audit?limit=10",
+            server.http_base
+        ))
+        .bearer_auth(&owner_a.access_token)
+        .send()
+        .await
+        .expect("cross-tenant audit fetch should return a response");
+    assert_eq!(cross_tenant_audit.status(), reqwest::StatusCode::NOT_FOUND);
+
     let member_list_for_other_tenant = client
         .get(format!(
             "{}/v1/tenants/{}/members",
@@ -126,6 +137,23 @@ async fn rest_api_enforces_tenant_isolation() {
     assert_eq!(switched_summary["done_task_count"], 0);
     assert_eq!(switched_summary["overdue_task_count"], 0);
     assert_eq!(switched_summary["recent_activity_count"], 1);
+
+    let switched_audit = client
+        .get(format!(
+            "{}/v1/tasks/{task_id}/audit?limit=10",
+            server.http_base
+        ))
+        .bearer_auth(switched_access_token)
+        .send()
+        .await
+        .expect("switched audit fetch should return a response");
+    assert_eq!(switched_audit.status(), reqwest::StatusCode::OK);
+    let switched_audit: Value = switched_audit
+        .json()
+        .await
+        .expect("switched audit response should be json");
+    assert_eq!(switched_audit["data"][0]["event_type"], "task_created");
+    assert_eq!(switched_audit["next_cursor"], Value::Null);
 
     let member_list = client
         .get(format!(

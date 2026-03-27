@@ -131,6 +131,11 @@ PATCH_JSON="$(
 [[ "$(jq -r '.status' <<<"$PATCH_JSON")" == "in_progress" ]] || fail "task patch did not update status"
 [[ "$(jq -r '.priority' <<<"$PATCH_JSON")" == "urgent" ]] || fail "task patch did not update priority"
 
+step "Verify task audit feed"
+AUDIT_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/audit?limit=10" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.data[0].event_type' <<<"$AUDIT_JSON")" == "task_updated" ]] || fail "task audit did not return the most recent update event first"
+[[ "$(jq -r '.data[1].event_type' <<<"$AUDIT_JSON")" == "task_created" ]] || fail "task audit did not include the create event"
+
 step "Verify dashboard summary"
 SUMMARY_JSON="$(curl -sS "$BASE/v1/dashboard/summary" -H "Authorization: Bearer $ACCESS_TOKEN")"
 [[ "$(jq -r '.open_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected open task count"
