@@ -3,7 +3,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::domain::{
-    CreateTaskInput, PaginatedTasks, TaskFilters, TaskRecord, TaskResponse, UpdateTaskInput,
+    CreateTaskInput, DashboardSummary, PaginatedTasks, TaskFilters, TaskRecord, TaskResponse,
+    UpdateTaskInput,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::Cursor;
@@ -88,6 +89,10 @@ pub async fn list_tasks(
     limit: usize,
 ) -> AppResult<PaginatedTasks> {
     state.db.list_tasks(tenant_id, filters, cursor, limit).await
+}
+
+pub async fn dashboard_summary(state: &AppState, tenant_id: Uuid) -> AppResult<DashboardSummary> {
+    state.db.dashboard_summary(tenant_id).await
 }
 
 pub async fn get_task(state: &AppState, tenant_id: Uuid, task_id: Uuid) -> AppResult<TaskRecord> {

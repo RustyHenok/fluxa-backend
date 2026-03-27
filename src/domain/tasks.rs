@@ -213,6 +213,15 @@ pub struct PaginatedTasks {
     pub next_cursor: Option<Cursor>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct DashboardSummary {
+    pub open_task_count: i64,
+    pub in_progress_task_count: i64,
+    pub done_task_count: i64,
+    pub overdue_task_count: i64,
+    pub recent_activity_count: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskResponse {
     pub id: Uuid,

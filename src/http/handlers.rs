@@ -9,8 +9,9 @@ use uuid::Uuid;
 
 use crate::cache::StoredResponse;
 use crate::domain::{
-    CreateTaskInput, JobResponse, TaskResponse, TenantMemberResponse, TenantMembershipResponse,
-    UpdateTaskInput, UserResponse, validate_task_priority, validate_task_status,
+    CreateTaskInput, DashboardSummary, JobResponse, TaskResponse, TenantMemberResponse,
+    TenantMembershipResponse, UpdateTaskInput, UserResponse, validate_task_priority,
+    validate_task_status,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::Cursor;
@@ -161,6 +162,14 @@ pub(super) async fn list_tenant_members(
             .map(TenantMemberResponse::try_from)
             .collect::<AppResult<Vec<_>>>()?,
     ))
+}
+
+pub(super) async fn dashboard_summary(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<DashboardSummary>> {
+    let summary = task_service::dashboard_summary(&state, user.tenant_id).await?;
+    Ok(Json(summary))
 }
 
 pub(super) async fn list_tasks(

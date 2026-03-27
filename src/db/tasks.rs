@@ -5,13 +5,41 @@ use uuid::Uuid;
 
 use super::Database;
 use crate::domain::{
-    CreateTaskInput, PaginatedTasks, TaskFilters, TaskPriority, TaskRecord, TaskStatus,
-    UpdateTaskInput,
+    CreateTaskInput, DashboardSummary, PaginatedTasks, TaskFilters, TaskPriority, TaskRecord,
+    TaskStatus, UpdateTaskInput,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::Cursor;
 
 impl Database {
+    pub async fn dashboard_summary(&self, tenant_id: Uuid) -> AppResult<DashboardSummary> {
+        sqlx::query_as::<_, DashboardSummary>(
+            r#"
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'open')::BIGINT AS open_task_count,
+                COUNT(*) FILTER (WHERE status = 'in_progress')::BIGINT AS in_progress_task_count,
+                COUNT(*) FILTER (WHERE status = 'done')::BIGINT AS done_task_count,
+                COUNT(*) FILTER (
+                    WHERE due_at IS NOT NULL
+                      AND due_at <= now()
+                      AND status NOT IN ('done', 'archived')
+                )::BIGINT AS overdue_task_count,
+                (
+                    SELECT COUNT(*)::BIGINT
+                    FROM task_audit_log
+                    WHERE tenant_id = $1
+                      AND created_at >= now() - interval '7 days'
+                ) AS recent_activity_count
+            FROM tasks
+            WHERE tenant_id = $1
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(AppError::from)
+    }
+
     pub async fn create_task(
         &self,
         tenant_id: Uuid,

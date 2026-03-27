@@ -60,6 +60,7 @@ fn router(state: AppState) -> AppResult<Router> {
 
     let protected_routes = Router::new()
         .route("/auth/switch-tenant", post(handlers::switch_tenant))
+        .route("/dashboard/summary", get(handlers::dashboard_summary))
         .route("/me", get(handlers::me))
         .route("/me/tenants", get(handlers::list_my_tenants))
         .route(

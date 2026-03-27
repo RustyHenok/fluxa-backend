@@ -44,6 +44,23 @@ async fn rest_api_enforces_tenant_isolation() {
         .expect("error response should be json");
     assert_eq!(body["error"]["code"], "not_found");
 
+    let owner_a_summary = client
+        .get(format!("{}/v1/dashboard/summary", server.http_base))
+        .bearer_auth(&owner_a.access_token)
+        .send()
+        .await
+        .expect("dashboard summary should return a response");
+    assert_eq!(owner_a_summary.status(), reqwest::StatusCode::OK);
+    let owner_a_summary: Value = owner_a_summary
+        .json()
+        .await
+        .expect("dashboard summary should be json");
+    assert_eq!(owner_a_summary["open_task_count"], 0);
+    assert_eq!(owner_a_summary["in_progress_task_count"], 0);
+    assert_eq!(owner_a_summary["done_task_count"], 0);
+    assert_eq!(owner_a_summary["overdue_task_count"], 0);
+    assert_eq!(owner_a_summary["recent_activity_count"], 0);
+
     let member_list_for_other_tenant = client
         .get(format!(
             "{}/v1/tenants/{}/members",
@@ -92,6 +109,23 @@ async fn rest_api_enforces_tenant_isolation() {
         .expect("switched tenant task fetch should return a response");
 
     assert_eq!(switched_fetch.status(), reqwest::StatusCode::OK);
+
+    let switched_summary = client
+        .get(format!("{}/v1/dashboard/summary", server.http_base))
+        .bearer_auth(switched_access_token)
+        .send()
+        .await
+        .expect("switched dashboard summary should return a response");
+    assert_eq!(switched_summary.status(), reqwest::StatusCode::OK);
+    let switched_summary: Value = switched_summary
+        .json()
+        .await
+        .expect("switched dashboard summary should be json");
+    assert_eq!(switched_summary["open_task_count"], 1);
+    assert_eq!(switched_summary["in_progress_task_count"], 0);
+    assert_eq!(switched_summary["done_task_count"], 0);
+    assert_eq!(switched_summary["overdue_task_count"], 0);
+    assert_eq!(switched_summary["recent_activity_count"], 1);
 
     let member_list = client
         .get(format!(

@@ -131,6 +131,14 @@ PATCH_JSON="$(
 [[ "$(jq -r '.status' <<<"$PATCH_JSON")" == "in_progress" ]] || fail "task patch did not update status"
 [[ "$(jq -r '.priority' <<<"$PATCH_JSON")" == "urgent" ]] || fail "task patch did not update priority"
 
+step "Verify dashboard summary"
+SUMMARY_JSON="$(curl -sS "$BASE/v1/dashboard/summary" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.open_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected open task count"
+[[ "$(jq -r '.in_progress_task_count' <<<"$SUMMARY_JSON")" == "1" ]] || fail "dashboard summary returned unexpected in-progress task count"
+[[ "$(jq -r '.done_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected done task count"
+[[ "$(jq -r '.overdue_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected overdue task count"
+[[ "$(jq -r '.recent_activity_count' <<<"$SUMMARY_JSON")" == "2" ]] || fail "dashboard summary returned unexpected recent activity count"
+
 step "Create export job and wait for completion"
 EXPORT_KEY="task-export-$(date +%s)-$RANDOM"
 JOB_JSON="$(
