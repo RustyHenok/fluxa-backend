@@ -20,6 +20,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - `POST /v1/auth/switch-tenant`
 - `GET /v1/me`
 - `GET /v1/me/tenants`
+- `GET /v1/tenants/:tenant_id/members`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
 - `GET /v1/tasks/:task_id`

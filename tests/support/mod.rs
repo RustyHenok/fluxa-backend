@@ -130,6 +130,7 @@ pub struct RegisteredUser {
     pub refresh_token: String,
     pub tenant_id: String,
     pub user_id: String,
+    pub email: String,
 }
 
 pub async fn add_membership(user_id: &str, tenant_id: &str, role: &str) {
@@ -152,10 +153,11 @@ pub async fn add_membership(user_id: &str, tenant_id: &str, role: &str) {
 }
 
 pub async fn register_user(client: &Client, base: &str, label: &str) -> RegisteredUser {
+    let email = unique_email(label);
     let response = client
         .post(format!("{base}/v1/auth/register"))
         .json(&json!({
-            "email": unique_email(label),
+            "email": email,
             "password": "supersecret123",
             "tenant_name": format!("{label} Workspace"),
         }))
@@ -183,6 +185,7 @@ pub async fn register_user(client: &Client, base: &str, label: &str) -> Register
             .as_str()
             .expect("register should include user id")
             .to_string(),
+        email,
     }
 }
 

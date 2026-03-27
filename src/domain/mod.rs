@@ -4,7 +4,8 @@ pub mod tasks;
 
 pub use auth::{
     MembershipRecord, MembershipRole, ROLE_ADMIN, ROLE_MEMBER, ROLE_OWNER, RefreshTokenRecord,
-    TenantMembershipResponse, TenantRecord, UserRecord, UserResponse, validate_role,
+    TenantMemberRecord, TenantMemberResponse, TenantMembershipResponse, TenantRecord, UserRecord,
+    UserResponse, validate_role,
 };
 pub use jobs::{
     BackgroundJobRecord, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER, JOB_STATUS_QUEUED,

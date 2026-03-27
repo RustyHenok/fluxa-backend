@@ -83,6 +83,14 @@ pub struct MembershipRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct TenantMemberRecord {
+    pub user_id: Uuid,
+    pub email: String,
+    pub role: String,
+    pub joined_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct RefreshTokenRecord {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -127,6 +135,27 @@ impl TryFrom<&MembershipRecord> for TenantMembershipResponse {
             tenant_name: value.tenant_name.clone(),
             role: value.parsed_role()?,
             created_at: value.created_at,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TenantMemberResponse {
+    pub user_id: Uuid,
+    pub email: String,
+    pub role: MembershipRole,
+    pub joined_at: DateTime<Utc>,
+}
+
+impl TryFrom<&TenantMemberRecord> for TenantMemberResponse {
+    type Error = AppError;
+
+    fn try_from(value: &TenantMemberRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            user_id: value.user_id,
+            email: value.email.clone(),
+            role: validate_role(&value.role)?,
+            joined_at: value.joined_at,
         })
     }
 }

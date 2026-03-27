@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::cache::StoredResponse;
 use crate::domain::{
-    CreateTaskInput, JobResponse, TaskResponse, TenantMembershipResponse, UpdateTaskInput,
-    UserResponse, validate_task_priority, validate_task_status,
+    CreateTaskInput, JobResponse, TaskResponse, TenantMemberResponse, TenantMembershipResponse,
+    UpdateTaskInput, UserResponse, validate_task_priority, validate_task_status,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::Cursor;
@@ -144,6 +144,21 @@ pub(super) async fn list_my_tenants(
         memberships
             .iter()
             .map(TenantMembershipResponse::try_from)
+            .collect::<AppResult<Vec<_>>>()?,
+    ))
+}
+
+pub(super) async fn list_tenant_members(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(tenant_id): Path<Uuid>,
+) -> AppResult<Json<Vec<TenantMemberResponse>>> {
+    let members = auth_service::list_tenant_members(&state, user.tenant_id, tenant_id).await?;
+
+    Ok(Json(
+        members
+            .iter()
+            .map(TenantMemberResponse::try_from)
             .collect::<AppResult<Vec<_>>>()?,
     ))
 }

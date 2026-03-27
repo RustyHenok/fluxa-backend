@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use super::Database;
-use crate::domain::MembershipRecord;
+use crate::domain::{MembershipRecord, TenantMemberRecord};
 use crate::error::{AppError, AppResult};
 
 impl Database {
@@ -69,6 +69,25 @@ impl Database {
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::from)
+    }
+
+    pub async fn list_tenant_members(&self, tenant_id: Uuid) -> AppResult<Vec<TenantMemberRecord>> {
+        sqlx::query_as::<_, TenantMemberRecord>(
+            r#"
+            SELECT tm.user_id,
+                   u.email,
+                   tm.role,
+                   tm.created_at AS joined_at
+            FROM tenant_memberships tm
+            JOIN users u ON u.id = tm.user_id
+            WHERE tm.tenant_id = $1
+            ORDER BY tm.created_at ASC, u.email ASC
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
         .await
         .map_err(AppError::from)
     }

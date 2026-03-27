@@ -44,6 +44,20 @@ async fn rest_api_enforces_tenant_isolation() {
         .expect("error response should be json");
     assert_eq!(body["error"]["code"], "not_found");
 
+    let member_list_for_other_tenant = client
+        .get(format!(
+            "{}/v1/tenants/{}/members",
+            server.http_base, owner_b.tenant_id
+        ))
+        .bearer_auth(&owner_a.access_token)
+        .send()
+        .await
+        .expect("cross-tenant member list should return a response");
+    assert_eq!(
+        member_list_for_other_tenant.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+
     add_membership(&owner_a.user_id, &owner_b.tenant_id, "member").await;
 
     let switched = client
@@ -78,6 +92,40 @@ async fn rest_api_enforces_tenant_isolation() {
         .expect("switched tenant task fetch should return a response");
 
     assert_eq!(switched_fetch.status(), reqwest::StatusCode::OK);
+
+    let member_list = client
+        .get(format!(
+            "{}/v1/tenants/{}/members",
+            server.http_base, owner_b.tenant_id
+        ))
+        .bearer_auth(switched_access_token)
+        .send()
+        .await
+        .expect("same-tenant member list should return a response");
+
+    assert_eq!(member_list.status(), reqwest::StatusCode::OK);
+    let members: Value = member_list
+        .json()
+        .await
+        .expect("member list response should be json");
+    let members = members.as_array().expect("member list should be an array");
+    assert_eq!(members.len(), 2);
+    assert!(
+        members.iter().any(|member| {
+            member["user_id"] == owner_b.user_id
+                && member["email"] == owner_b.email
+                && member["role"] == "owner"
+        }),
+        "tenant owner should appear in member list"
+    );
+    assert!(
+        members.iter().any(|member| {
+            member["user_id"] == owner_a.user_id
+                && member["email"] == owner_a.email
+                && member["role"] == "member"
+        }),
+        "switched member should appear in member list"
+    );
 
     let me_response = client
         .get(format!("{}/v1/me", server.http_base))

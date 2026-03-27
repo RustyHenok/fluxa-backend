@@ -1,7 +1,7 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use uuid::Uuid;
 
-use crate::domain::{MembershipRecord, UserRecord};
+use crate::domain::{MembershipRecord, TenantMemberRecord, UserRecord};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -139,6 +139,18 @@ pub async fn me(state: &AppState, user_id: Uuid, tenant_id: Uuid) -> AppResult<C
 
 pub async fn list_tenants(state: &AppState, user_id: Uuid) -> AppResult<Vec<MembershipRecord>> {
     state.db.list_memberships(user_id).await
+}
+
+pub async fn list_tenant_members(
+    state: &AppState,
+    active_tenant_id: Uuid,
+    requested_tenant_id: Uuid,
+) -> AppResult<Vec<TenantMemberRecord>> {
+    if active_tenant_id != requested_tenant_id {
+        return Err(AppError::NotFound("tenant not found".into()));
+    }
+
+    state.db.list_tenant_members(requested_tenant_id).await
 }
 
 async fn issue_session(

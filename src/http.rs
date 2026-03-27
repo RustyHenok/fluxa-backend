@@ -63,6 +63,10 @@ fn router(state: AppState) -> AppResult<Router> {
         .route("/me", get(handlers::me))
         .route("/me/tenants", get(handlers::list_my_tenants))
         .route(
+            "/tenants/:tenant_id/members",
+            get(handlers::list_tenant_members),
+        )
+        .route(
             "/tasks",
             get(handlers::list_tasks).post(handlers::create_task),
         )
