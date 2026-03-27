@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -21,6 +22,8 @@ struct TestServer {
     child: Child,
     http_base: String,
     grpc_base: String,
+    stdout_path: std::path::PathBuf,
+    stderr_path: std::path::PathBuf,
 }
 
 impl TestServer {
@@ -29,6 +32,10 @@ impl TestServer {
         let grpc_port = free_port();
         let http_base = format!("http://127.0.0.1:{http_port}");
         let grpc_base = format!("http://127.0.0.1:{grpc_port}");
+        let stdout_path = log_path("stack-contract-stdout");
+        let stderr_path = log_path("stack-contract-stderr");
+        let stdout = File::create(&stdout_path).expect("failed to create test stdout log");
+        let stderr = File::create(&stderr_path).expect("failed to create test stderr log");
 
         let child = Command::new(test_binary())
             .arg("--mode")
@@ -48,8 +55,9 @@ impl TestServer {
             .env("GRPC_ADDR", format!("127.0.0.1:{grpc_port}"))
             .env("STARTUP_MAX_RETRIES", "10")
             .env("STARTUP_RETRY_DELAY_MS", "500")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .env("DATABASE_MAX_CONNECTIONS", "2")
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
             .spawn()
             .expect("failed to spawn fluxa-backend test server");
 
@@ -57,6 +65,8 @@ impl TestServer {
             child,
             http_base,
             grpc_base,
+            stdout_path,
+            stderr_path,
         };
         server.wait_for_ready().await;
         server
@@ -68,11 +78,17 @@ impl TestServer {
 
         loop {
             if Instant::now() > deadline {
-                panic!("test server did not become ready in time");
+                panic!(
+                    "test server did not become ready in time\n{}",
+                    self.debug_output()
+                );
             }
 
             if let Some(status) = self.child.try_wait().expect("failed to poll child") {
-                panic!("test server exited before becoming ready: {status}");
+                panic!(
+                    "test server exited before becoming ready: {status}\n{}",
+                    self.debug_output()
+                );
             }
 
             match client
@@ -98,6 +114,18 @@ impl Drop for TestServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.stdout_path);
+        let _ = std::fs::remove_file(&self.stderr_path);
+    }
+}
+
+impl TestServer {
+    fn debug_output(&self) -> String {
+        format!(
+            "stdout:\n{}\n\nstderr:\n{}",
+            read_log(&self.stdout_path),
+            read_log(&self.stderr_path)
+        )
     }
 }
 
@@ -122,6 +150,15 @@ fn free_port() -> u16 {
 
 fn unique_email(label: &str) -> String {
     format!("{label}-{}@example.com", Uuid::new_v4())
+}
+
+fn log_path(prefix: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("{prefix}-{}.log", Uuid::new_v4()))
+}
+
+fn read_log(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|error| format!("<failed to read {}: {error}>", path.display()))
 }
 
 async fn register_user(client: &Client, base: &str, label: &str) -> RegisteredUser {
