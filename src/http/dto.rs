@@ -36,6 +36,11 @@ pub(super) struct LogoutRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct SwitchTenantRequest {
+    pub(super) tenant_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct TaskPayload {
     pub(super) title: String,
     pub(super) description: Option<String>,

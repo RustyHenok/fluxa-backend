@@ -7,6 +7,7 @@ use fluxa_backend::grpc::proto::job_admin_client::JobAdminClient;
 use fluxa_backend::grpc::proto::{GetJobStatusRequest, JobReply};
 use reqwest::Client;
 use serde_json::{Value, json};
+use sqlx::PgPool;
 use tokio::time::sleep;
 use tonic::transport::Channel;
 use uuid::Uuid;
@@ -131,6 +132,25 @@ pub struct RegisteredUser {
     pub user_id: String,
 }
 
+pub async fn add_membership(user_id: &str, tenant_id: &str, role: &str) {
+    let pool = PgPool::connect(&test_database_url())
+        .await
+        .expect("test database should be reachable");
+
+    sqlx::query(
+        r#"
+        INSERT INTO tenant_memberships (tenant_id, user_id, role, created_at)
+        VALUES ($1, $2, $3, now())
+        "#,
+    )
+    .bind(Uuid::parse_str(tenant_id).expect("tenant id should be uuid"))
+    .bind(Uuid::parse_str(user_id).expect("user id should be uuid"))
+    .bind(role)
+    .execute(&pool)
+    .await
+    .expect("membership insert should succeed");
+}
+
 pub async fn register_user(client: &Client, base: &str, label: &str) -> RegisteredUser {
     let response = client
         .post(format!("{base}/v1/auth/register"))
@@ -230,6 +250,10 @@ fn free_port() -> u16 {
 
 fn unique_email(label: &str) -> String {
     format!("{label}-{}@example.com", Uuid::new_v4())
+}
+
+fn test_database_url() -> String {
+    std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_string())
 }
 
 fn log_path(prefix: &str) -> std::path::PathBuf {

@@ -20,8 +20,8 @@ use crate::state::AppState;
 use super::AuthenticatedUser;
 use super::dto::{
     AuthResponse, ExportRequest, HealthResponse, LoginRequest, LogoutRequest, MeResponse,
-    RefreshRequest, RegisterRequest, TaskListQuery, TaskListResponse, TaskPatchPayload,
-    TaskPayload,
+    RefreshRequest, RegisterRequest, SwitchTenantRequest, TaskListQuery, TaskListResponse,
+    TaskPatchPayload, TaskPayload,
 };
 use super::helpers::{
     ensure_admin_role, ensure_task_write_role, normalize_email, normalize_optional_choice,
@@ -105,6 +105,22 @@ pub(super) async fn logout(
 ) -> AppResult<StatusCode> {
     auth_service::logout(&state, &payload.refresh_token).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn switch_tenant(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<SwitchTenantRequest>,
+) -> AppResult<Json<AuthResponse>> {
+    let session = auth_service::switch_tenant(&state, user.user_id, payload.tenant_id).await?;
+
+    Ok(Json(AuthResponse {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in_seconds: session.expires_in_seconds,
+        user: UserResponse::from(&session.user),
+        active_tenant: TenantMembershipResponse::try_from(&session.membership)?,
+    }))
 }
 
 pub(super) async fn me(

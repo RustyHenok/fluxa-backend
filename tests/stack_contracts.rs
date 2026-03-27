@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 mod support;
 
-use support::{TestServer, create_task, poll_job_status, register_user};
+use support::{TestServer, add_membership, create_task, poll_job_status, register_user};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires local Postgres and Redis services"]
@@ -43,6 +43,41 @@ async fn rest_api_enforces_tenant_isolation() {
         .await
         .expect("error response should be json");
     assert_eq!(body["error"]["code"], "not_found");
+
+    add_membership(&owner_a.user_id, &owner_b.tenant_id, "member").await;
+
+    let switched = client
+        .post(format!("{}/v1/auth/switch-tenant", server.http_base))
+        .bearer_auth(&owner_a.access_token)
+        .json(&json!({
+            "tenant_id": owner_b.tenant_id,
+        }))
+        .send()
+        .await
+        .expect("switch-tenant should return a response");
+
+    assert_eq!(switched.status(), reqwest::StatusCode::OK);
+    let switched_body: Value = switched
+        .json()
+        .await
+        .expect("switch-tenant response should be json");
+    assert_eq!(
+        switched_body["active_tenant"]["tenant_id"],
+        owner_b.tenant_id
+    );
+    assert_eq!(switched_body["active_tenant"]["role"], "member");
+    let switched_access_token = switched_body["access_token"]
+        .as_str()
+        .expect("switch-tenant should return an access token");
+
+    let switched_fetch = client
+        .get(format!("{}/v1/tasks/{task_id}", server.http_base))
+        .bearer_auth(switched_access_token)
+        .send()
+        .await
+        .expect("switched tenant task fetch should return a response");
+
+    assert_eq!(switched_fetch.status(), reqwest::StatusCode::OK);
 
     let me_response = client
         .get(format!("{}/v1/me", server.http_base))

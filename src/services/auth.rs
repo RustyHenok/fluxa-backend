@@ -111,6 +111,21 @@ pub async fn logout(state: &AppState, refresh_token: &str) -> AppResult<()> {
     state.db.revoke_refresh_token(refresh_token_id).await
 }
 
+pub async fn switch_tenant(
+    state: &AppState,
+    user_id: Uuid,
+    tenant_id: Uuid,
+) -> AppResult<AuthSession> {
+    let user = state.db.get_user_by_id(user_id).await?;
+    let membership = state
+        .db
+        .get_membership(user_id, tenant_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("tenant membership not found".into()))?;
+
+    issue_session(state, user, membership, Uuid::new_v4()).await
+}
+
 pub async fn me(state: &AppState, user_id: Uuid, tenant_id: Uuid) -> AppResult<CurrentUserProfile> {
     let user = state.db.get_user_by_id(user_id).await?;
     let membership = state
