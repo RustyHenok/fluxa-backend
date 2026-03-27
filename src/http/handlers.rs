@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::cache::StoredResponse;
 use crate::domain::{
-    CreateTaskInput, DashboardSummary, JobResponse, TaskAuditResponse, TaskResponse,
-    TenantMemberResponse, TenantMembershipResponse, UpdateTaskInput, UserResponse,
+    CreateTaskInput, DashboardSummary, JobResponse, JobResultResponse, TaskAuditResponse,
+    TaskResponse, TenantMemberResponse, TenantMembershipResponse, UpdateTaskInput, UserResponse,
     validate_task_priority, validate_task_status,
 };
 use crate::error::{AppError, AppResult};
@@ -389,4 +389,13 @@ pub(super) async fn get_job(
     let job = jobs_service::get_tenant_job(&state, job_id, user.tenant_id).await?;
 
     Ok(Json(JobResponse::try_from(&job)?))
+}
+
+pub(super) async fn get_job_result(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(job_id): Path<Uuid>,
+) -> AppResult<Json<JobResultResponse>> {
+    let result = jobs_service::get_tenant_job_result(&state, job_id, user.tenant_id).await?;
+    Ok(Json(result))
 }

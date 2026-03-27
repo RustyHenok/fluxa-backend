@@ -80,6 +80,7 @@ fn router(state: AppState) -> AppResult<Router> {
         .route("/tasks/:task_id/audit", get(handlers::list_task_audit))
         .route("/exports/tasks", post(handlers::create_export))
         .route("/jobs/:job_id", get(handlers::get_job))
+        .route("/jobs/:job_id/result", get(handlers::get_job_result))
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::protected_middleware,

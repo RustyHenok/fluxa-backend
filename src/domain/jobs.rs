@@ -156,3 +156,29 @@ impl TryFrom<&BackgroundJobRecord> for JobResponse {
         })
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobResultResponse {
+    pub job_id: Uuid,
+    pub job_type: JobType,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub result: Value,
+}
+
+impl TryFrom<&BackgroundJobRecord> for JobResultResponse {
+    type Error = AppError;
+
+    fn try_from(value: &BackgroundJobRecord) -> Result<Self, Self::Error> {
+        let result = value
+            .result_payload
+            .clone()
+            .ok_or_else(|| AppError::internal("completed job is missing result payload"))?;
+
+        Ok(Self {
+            job_id: value.id,
+            job_type: value.parsed_job_type()?,
+            finished_at: value.finished_at,
+            result,
+        })
+    }
+}

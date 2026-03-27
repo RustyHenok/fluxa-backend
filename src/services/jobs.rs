@@ -4,7 +4,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::domain::{BackgroundJobRecord, JobResponse, JobType, TaskFilters, TaskResponse};
+use crate::domain::{
+    BackgroundJobRecord, JobResponse, JobResultResponse, JobStatus, JobType, TaskFilters,
+    TaskResponse,
+};
 use crate::error::{AppError, AppResult};
 use crate::services::tasks;
 use crate::state::AppState;
@@ -79,6 +82,24 @@ pub async fn get_tenant_job(
     }
 
     Ok(job)
+}
+
+pub async fn get_tenant_job_result(
+    state: &AppState,
+    job_id: Uuid,
+    tenant_id: Uuid,
+) -> AppResult<JobResultResponse> {
+    let job = get_tenant_job(state, job_id, tenant_id).await?;
+
+    match job.parsed_status()? {
+        JobStatus::Completed => JobResultResponse::try_from(&job),
+        JobStatus::Queued | JobStatus::Running => {
+            Err(AppError::Conflict("job result is not ready".into()))
+        }
+        JobStatus::DeadLetter => Err(AppError::Conflict(
+            "job did not complete successfully".into(),
+        )),
+    }
 }
 
 pub async fn dispatch_ready_jobs(state: &AppState, limit: i64) -> AppResult<()> {

@@ -167,6 +167,13 @@ done
 
 [[ "$JOB_STATUS" == "completed" ]] || fail "export job did not complete in time"
 
+step "Fetch dedicated job result"
+JOB_RESULT_JSON="$(curl -sS "$BASE/v1/jobs/$JOB_ID/result" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.job_id' <<<"$JOB_RESULT_JSON")" == "$JOB_ID" ]] || fail "job result endpoint returned an unexpected job id"
+[[ "$(jq -r '.job_type' <<<"$JOB_RESULT_JSON")" == "task_export" ]] || fail "job result endpoint returned an unexpected job type"
+[[ "$(jq -r '.result.task_count' <<<"$JOB_RESULT_JSON")" == "1" ]] || fail "job result endpoint returned an unexpected task count"
+[[ "$(jq -r '.result.tasks[0].id' <<<"$JOB_RESULT_JSON")" == "$TASK_ID" ]] || fail "job result endpoint did not include the expected task"
+
 step "Refresh and logout"
 REFRESH_JSON="$(
   curl -sS -X POST "$BASE/v1/auth/refresh" \

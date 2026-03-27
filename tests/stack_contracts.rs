@@ -8,7 +8,10 @@ use serde_json::{Value, json};
 
 mod support;
 
-use support::{TestServer, add_membership, create_task, poll_job_status, register_user};
+use support::{
+    TestServer, add_membership, create_task, poll_job_status, register_user,
+    wait_for_rest_job_completion,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires local Postgres and Redis services"]
@@ -71,6 +74,52 @@ async fn rest_api_enforces_tenant_isolation() {
         .await
         .expect("cross-tenant audit fetch should return a response");
     assert_eq!(cross_tenant_audit.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let export_job = client
+        .post(format!("{}/v1/exports/tasks", server.http_base))
+        .bearer_auth(&owner_b.access_token)
+        .header(
+            "Idempotency-Key",
+            format!("export-{}", uuid::Uuid::new_v4()),
+        )
+        .json(&json!({
+            "status": "open",
+        }))
+        .send()
+        .await
+        .expect("export creation should return a response");
+    assert_eq!(export_job.status(), reqwest::StatusCode::ACCEPTED);
+    let export_job: Value = export_job
+        .json()
+        .await
+        .expect("export creation response should be json");
+    let export_job_id = export_job["id"]
+        .as_str()
+        .expect("export job id should exist")
+        .to_string();
+
+    let finished_export = wait_for_rest_job_completion(
+        &client,
+        &server.http_base,
+        &owner_b.access_token,
+        &export_job_id,
+    )
+    .await;
+    assert_eq!(finished_export["status"], "completed");
+
+    let cross_tenant_job_result = client
+        .get(format!(
+            "{}/v1/jobs/{}/result",
+            server.http_base, export_job_id
+        ))
+        .bearer_auth(&owner_a.access_token)
+        .send()
+        .await
+        .expect("cross-tenant job result should return a response");
+    assert_eq!(
+        cross_tenant_job_result.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
 
     let member_list_for_other_tenant = client
         .get(format!(
@@ -154,6 +203,25 @@ async fn rest_api_enforces_tenant_isolation() {
         .expect("switched audit response should be json");
     assert_eq!(switched_audit["data"][0]["event_type"], "task_created");
     assert_eq!(switched_audit["next_cursor"], Value::Null);
+
+    let switched_job_result = client
+        .get(format!(
+            "{}/v1/jobs/{}/result",
+            server.http_base, export_job_id
+        ))
+        .bearer_auth(switched_access_token)
+        .send()
+        .await
+        .expect("switched job result should return a response");
+    assert_eq!(switched_job_result.status(), reqwest::StatusCode::OK);
+    let switched_job_result: Value = switched_job_result
+        .json()
+        .await
+        .expect("switched job result should be json");
+    assert_eq!(switched_job_result["job_id"], export_job_id);
+    assert_eq!(switched_job_result["job_type"], "task_export");
+    assert_eq!(switched_job_result["result"]["task_count"], 1);
+    assert_eq!(switched_job_result["result"]["tasks"][0]["id"], task_id);
 
     let member_list = client
         .get(format!(

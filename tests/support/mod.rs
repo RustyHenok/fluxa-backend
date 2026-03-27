@@ -239,6 +239,42 @@ pub async fn poll_job_status(client: &mut JobAdminClient<Channel>, job_id: &str)
     }
 }
 
+pub async fn wait_for_rest_job_completion(
+    client: &Client,
+    base: &str,
+    access_token: &str,
+    job_id: &str,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    loop {
+        let response = client
+            .get(format!("{base}/v1/jobs/{job_id}"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .expect("job status request should succeed");
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body: Value = response
+            .json()
+            .await
+            .expect("job status response should be json");
+
+        match body["status"].as_str() {
+            Some("completed") => return body,
+            Some("dead_letter") => panic!("job {job_id} dead-lettered unexpectedly"),
+            _ => {}
+        }
+
+        if Instant::now() > deadline {
+            panic!("job {job_id} did not complete in time");
+        }
+
+        sleep(Duration::from_millis(500)).await;
+    }
+}
+
 fn test_binary() -> &'static str {
     env!("CARGO_BIN_EXE_fluxa-backend")
 }

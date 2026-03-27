@@ -9,8 +9,8 @@ pub use auth::{
 };
 pub use jobs::{
     BackgroundJobRecord, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER, JOB_STATUS_QUEUED,
-    JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_TASK_EXPORT, JobResponse, JobStatus,
-    JobType,
+    JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_TASK_EXPORT, JobResponse,
+    JobResultResponse, JobStatus, JobType,
 };
 pub use tasks::{
     CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TASK_PRIORITY_HIGH,
