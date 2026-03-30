@@ -65,6 +65,20 @@ async fn rest_api_enforces_tenant_isolation() {
         .expect("cross-tenant project fetch should return a response");
     assert_eq!(project_response.status(), reqwest::StatusCode::NOT_FOUND);
 
+    let project_tasks_response = client
+        .get(format!(
+            "{}/v1/projects/{project_id}/tasks?limit=10&status=open",
+            server.http_base
+        ))
+        .bearer_auth(&owner_a.access_token)
+        .send()
+        .await
+        .expect("cross-tenant project task list should return a response");
+    assert_eq!(
+        project_tasks_response.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+
     let owner_a_summary = client
         .get(format!("{}/v1/dashboard/summary", server.http_base))
         .bearer_auth(&owner_a.access_token)
@@ -200,6 +214,23 @@ async fn rest_api_enforces_tenant_isolation() {
         .await
         .expect("switched project response should be json");
     assert_eq!(switched_project["id"], project_id);
+
+    let switched_project_tasks = client
+        .get(format!(
+            "{}/v1/projects/{project_id}/tasks?limit=10&status=open",
+            server.http_base
+        ))
+        .bearer_auth(switched_access_token)
+        .send()
+        .await
+        .expect("switched project task list should return a response");
+    assert_eq!(switched_project_tasks.status(), reqwest::StatusCode::OK);
+    let switched_project_tasks: Value = switched_project_tasks
+        .json()
+        .await
+        .expect("switched project task list should be json");
+    assert_eq!(switched_project_tasks["data"][0]["id"], task_id);
+    assert_eq!(switched_project_tasks["data"][0]["project_id"], project_id);
 
     let switched_summary = client
         .get(format!("{}/v1/dashboard/summary", server.http_base))

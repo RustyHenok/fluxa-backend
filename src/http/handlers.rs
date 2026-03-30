@@ -202,6 +202,35 @@ pub(super) async fn get_project(
     Ok(Json(ProjectResponse::from(&project)))
 }
 
+pub(super) async fn list_project_tasks(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(project_id): Path<Uuid>,
+    Query(mut query): Query<TaskListQuery>,
+) -> AppResult<Json<TaskListResponse>> {
+    project_service::get_project(&state, user.tenant_id, project_id).await?;
+
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    query.project_id = Some(project_id);
+
+    let filters = query.clone().into_filters()?;
+    let cursor = query.cursor.as_deref().map(Cursor::decode).transpose()?;
+    let page = task_service::list_tasks_cached(
+        &state,
+        user.tenant_id,
+        &filters,
+        query.cursor.as_deref(),
+        cursor.as_ref(),
+        limit,
+    )
+    .await?;
+
+    Ok(Json(TaskListResponse {
+        data: page.data,
+        next_cursor: page.next_cursor,
+    }))
+}
+
 pub(super) async fn update_project(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,

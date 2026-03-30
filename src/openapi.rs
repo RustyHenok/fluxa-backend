@@ -288,6 +288,32 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/projects/{project_id}/tasks": {
+                "get": {
+                    "tags": ["projects"],
+                    "operationId": "listProjectTasks",
+                    "summary": "List tasks belonging to a project",
+                    "parameters": [
+                        path_uuid_parameter("project_id", "Project identifier."),
+                        limit_query_parameter(),
+                        cursor_query_parameter("cursor", "Opaque cursor from a previous task page."),
+                        query_parameter("status", false, "Filter by task status.", schema_ref("TaskStatus")),
+                        query_parameter("priority", false, "Filter by task priority.", schema_ref("TaskPriority")),
+                        query_parameter("assignee_id", false, "Filter by assignee.", uuid_schema()),
+                        query_parameter("due_before", false, "Return tasks due before this RFC3339 timestamp.", date_time_schema()),
+                        query_parameter("due_after", false, "Return tasks due after this RFC3339 timestamp.", date_time_schema()),
+                        query_parameter("updated_after", false, "Return tasks updated after this RFC3339 timestamp.", date_time_schema()),
+                        query_parameter("q", false, "Full-text search term applied to the task title and description.", string_schema())
+                    ],
+                    "responses": {
+                        "200": json_response("Paginated project task list.", schema_ref("TaskListResponse")),
+                        "400": error_response("Invalid query parameters."),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Project was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/tasks": {
                 "get": {
                     "tags": ["tasks"],
@@ -1044,5 +1070,6 @@ mod tests {
         let document = document();
         assert!(document["paths"]["/v1/projects"].is_object());
         assert!(document["paths"]["/v1/projects/{project_id}"].is_object());
+        assert!(document["paths"]["/v1/projects/{project_id}/tasks"].is_object());
     }
 }

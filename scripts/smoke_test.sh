@@ -134,6 +134,10 @@ LIST_JSON="$(curl -sS "$BASE/v1/tasks?limit=10&status=open&priority=high&project
 [[ "$(jq -r '.data[0].id' <<<"$LIST_JSON")" == "$TASK_ID" ]] || fail "task list did not include created task"
 [[ "$(jq -r '.data[0].project_id' <<<"$LIST_JSON")" == "$PROJECT_ID" ]] || fail "task list did not include the expected project id"
 
+PROJECT_TASKS_JSON="$(curl -sS "$BASE/v1/projects/$PROJECT_ID/tasks?limit=10&status=open&priority=high" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.data[0].id' <<<"$PROJECT_TASKS_JSON")" == "$TASK_ID" ]] || fail "project tasks endpoint did not include created task"
+[[ "$(jq -r '.data[0].project_id' <<<"$PROJECT_TASKS_JSON")" == "$PROJECT_ID" ]] || fail "project tasks endpoint returned an unexpected project id"
+
 PATCH_JSON="$(
   curl -sS -X PATCH "$BASE/v1/tasks/$TASK_ID" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \

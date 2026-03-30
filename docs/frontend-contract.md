@@ -136,6 +136,7 @@ Client expectation:
 - `GET /v1/projects/:project_id`
 - `PATCH /v1/projects/:project_id`
 - `DELETE /v1/projects/:project_id`
+- `GET /v1/projects/:project_id/tasks`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
 - `GET /v1/tasks/:task_id`
@@ -181,6 +182,7 @@ Recommended client behavior:
 
 - tasks may now include an optional `project_id`
 - `GET /v1/tasks` supports `project_id` filtering
+- `GET /v1/projects/:project_id/tasks` provides project-scoped task listing with the same cursor/filter behavior
 - `POST /v1/tasks` and `PATCH /v1/tasks/:task_id` may include `project_id`
 - project access stays tenant-scoped, just like task access
 

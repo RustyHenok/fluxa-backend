@@ -27,6 +27,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - `GET /v1/projects/:project_id`
 - `PATCH /v1/projects/:project_id`
 - `DELETE /v1/projects/:project_id`
+- `GET /v1/projects/:project_id/tasks`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
 - `GET /v1/tasks/:task_id`
