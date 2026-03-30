@@ -23,6 +23,7 @@ pub(super) fn filters_from_parts(
             .map(|value| validate_task_priority(&value.to_ascii_lowercase()))
             .transpose()
             .map_err(status_from_error)?,
+        project_id: None,
         assignee_id,
         due_before,
         due_after,

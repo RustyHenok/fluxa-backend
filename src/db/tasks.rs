@@ -53,6 +53,7 @@ impl Database {
             INSERT INTO tasks (
                 id,
                 tenant_id,
+                project_id,
                 title,
                 description,
                 status,
@@ -64,13 +65,14 @@ impl Database {
                 created_at,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $10)
-            RETURNING id, tenant_id, title, description, status, priority, assignee_id, due_at,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11, $11)
+            RETURNING id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
                       created_by, updated_by, created_at, updated_at
             "#,
         )
         .bind(Uuid::new_v4())
         .bind(tenant_id)
+        .bind(input.project_id)
         .bind(input.title.trim())
         .bind(input.description.clone())
         .bind(input.status.unwrap_or(TaskStatus::Open).as_str())
@@ -93,6 +95,7 @@ impl Database {
         .bind(tenant_id)
         .bind(actor_id)
         .bind(json!({
+            "project_id": task.project_id,
             "title": task.title,
             "status": task.status,
             "priority": task.priority,
@@ -110,7 +113,7 @@ impl Database {
     pub async fn get_task(&self, tenant_id: Uuid, task_id: Uuid) -> AppResult<Option<TaskRecord>> {
         sqlx::query_as::<_, TaskRecord>(
             r#"
-            SELECT id, tenant_id, title, description, status, priority, assignee_id, due_at,
+            SELECT id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
                    created_by, updated_by, created_at, updated_at
             FROM tasks
             WHERE tenant_id = $1 AND id = $2
@@ -132,7 +135,7 @@ impl Database {
     ) -> AppResult<PaginatedTasks> {
         let mut builder = QueryBuilder::<Postgres>::new(
             r#"
-            SELECT id, tenant_id, title, description, status, priority, assignee_id, due_at,
+            SELECT id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
                    created_by, updated_by, created_at, updated_at
             FROM tasks
             WHERE tenant_id = "#,
@@ -257,6 +260,11 @@ impl Database {
             changed += 1;
         }
 
+        if let Some(project_id) = input.project_id {
+            push_update_assignment(&mut builder, &mut needs_separator, "project_id", project_id);
+            changed += 1;
+        }
+
         if let Some(assignee_id) = input.assignee_id {
             push_update_assignment(
                 &mut builder,
@@ -286,7 +294,7 @@ impl Database {
         builder.push(" AND id = ");
         builder.push_bind(task_id);
         builder.push(
-            " RETURNING id, tenant_id, title, description, status, priority, assignee_id, due_at,
+            " RETURNING id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
                       created_by, updated_by, created_at, updated_at",
         );
 
@@ -308,6 +316,7 @@ impl Database {
         .bind(task.tenant_id)
         .bind(actor_id)
         .bind(json!({
+            "project_id": input.project_id,
             "title": input.title,
             "description": input.description,
             "status": input.status,
@@ -334,7 +343,7 @@ impl Database {
             r#"
             DELETE FROM tasks
             WHERE tenant_id = $1 AND id = $2
-            RETURNING id, tenant_id, title, description, status, priority, assignee_id, due_at,
+            RETURNING id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
                       created_by, updated_by, created_at, updated_at
             "#,
         )
@@ -355,6 +364,7 @@ impl Database {
         .bind(task.tenant_id)
         .bind(actor_id)
         .bind(json!({
+            "project_id": task.project_id,
             "title": task.title,
             "status": task.status,
             "priority": task.priority,
@@ -375,7 +385,7 @@ impl Database {
     ) -> AppResult<Vec<TaskRecord>> {
         let mut builder = QueryBuilder::<Postgres>::new(
             r#"
-            SELECT id, tenant_id, title, description, status, priority, assignee_id, due_at,
+            SELECT id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
                    created_by, updated_by, created_at, updated_at
             FROM tasks
             WHERE tenant_id = "#,
@@ -395,7 +405,7 @@ impl Database {
     pub async fn record_due_reminders(&self, tenant_id: Option<Uuid>) -> AppResult<usize> {
         let mut builder = QueryBuilder::<Postgres>::new(
             r#"
-            SELECT id, tenant_id, title, description, status, priority, assignee_id, due_at,
+            SELECT id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
                    created_by, updated_by, created_at, updated_at
             FROM tasks
             WHERE due_at IS NOT NULL
@@ -473,6 +483,11 @@ fn apply_task_filters<'a>(
     if let Some(priority) = filters.priority.as_ref() {
         builder.push(" AND priority = ");
         builder.push_bind(priority.as_str());
+    }
+
+    if let Some(project_id) = filters.project_id {
+        builder.push(" AND project_id = ");
+        builder.push_bind(project_id);
     }
 
     if let Some(assignee_id) = filters.assignee_id {

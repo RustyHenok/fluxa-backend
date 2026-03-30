@@ -9,20 +9,24 @@ use uuid::Uuid;
 
 use crate::cache::StoredResponse;
 use crate::domain::{
-    CreateTaskInput, DashboardSummary, JobResponse, JobResultResponse, TaskAuditResponse,
-    TaskResponse, TenantMemberResponse, TenantMembershipResponse, UpdateTaskInput, UserResponse,
+    CreateProjectInput, CreateTaskInput, DashboardSummary, JobResponse, JobResultResponse,
+    ProjectResponse, TaskAuditResponse, TaskResponse, TenantMemberResponse,
+    TenantMembershipResponse, UpdateProjectInput, UpdateTaskInput, UserResponse,
     validate_task_priority, validate_task_status,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
-use crate::services::{auth as auth_service, jobs as jobs_service, tasks as task_service};
+use crate::services::{
+    auth as auth_service, jobs as jobs_service, projects as project_service, tasks as task_service,
+};
 use crate::state::AppState;
 
 use super::AuthenticatedUser;
 use super::dto::{
     AuthResponse, ExportRequest, HealthResponse, LoginRequest, LogoutRequest, MeResponse,
-    RefreshRequest, RegisterRequest, SwitchTenantRequest, TaskAuditListResponse, TaskAuditQuery,
-    TaskListQuery, TaskListResponse, TaskPatchPayload, TaskPayload,
+    ProjectPatchPayload, ProjectPayload, RefreshRequest, RegisterRequest, SwitchTenantRequest,
+    TaskAuditListResponse, TaskAuditQuery, TaskListQuery, TaskListResponse, TaskPatchPayload,
+    TaskPayload,
 };
 use super::helpers::{
     ensure_admin_role, ensure_task_write_role, normalize_email, normalize_optional_choice,
@@ -164,6 +168,69 @@ pub(super) async fn list_tenant_members(
     ))
 }
 
+pub(super) async fn list_projects(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<Vec<ProjectResponse>>> {
+    let projects = project_service::list_projects(&state, user.tenant_id).await?;
+    Ok(Json(projects.iter().map(ProjectResponse::from).collect()))
+}
+
+pub(super) async fn create_project(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<ProjectPayload>,
+) -> AppResult<(StatusCode, Json<ProjectResponse>)> {
+    ensure_admin_role(user.role)?;
+    let input = CreateProjectInput {
+        name: payload.name,
+        description: payload.description,
+    }
+    .validate()?;
+
+    let project =
+        project_service::create_project(&state, user.tenant_id, user.user_id, input).await?;
+    Ok((StatusCode::CREATED, Json(ProjectResponse::from(&project))))
+}
+
+pub(super) async fn get_project(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(project_id): Path<Uuid>,
+) -> AppResult<Json<ProjectResponse>> {
+    let project = project_service::get_project(&state, user.tenant_id, project_id).await?;
+    Ok(Json(ProjectResponse::from(&project)))
+}
+
+pub(super) async fn update_project(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(project_id): Path<Uuid>,
+    Json(payload): Json<ProjectPatchPayload>,
+) -> AppResult<Json<ProjectResponse>> {
+    ensure_admin_role(user.role)?;
+    let input = UpdateProjectInput {
+        name: payload.name,
+        description: payload.description,
+    }
+    .validate()?;
+
+    let project =
+        project_service::update_project(&state, user.tenant_id, project_id, user.user_id, input)
+            .await?;
+    Ok(Json(ProjectResponse::from(&project)))
+}
+
+pub(super) async fn delete_project(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(project_id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    ensure_admin_role(user.role)?;
+    project_service::delete_project(&state, user.tenant_id, project_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(super) async fn dashboard_summary(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -226,6 +293,7 @@ pub(super) async fn create_task(
     }
 
     let input = CreateTaskInput {
+        project_id: payload.project_id,
         title: payload.title,
         description: payload.description,
         status: normalize_optional_choice(payload.status)
@@ -300,6 +368,7 @@ pub(super) async fn update_task(
 ) -> AppResult<Json<TaskResponse>> {
     ensure_task_write_role(user.role)?;
     let input = UpdateTaskInput {
+        project_id: payload.project_id,
         title: payload.title,
         description: payload.description,
         status: normalize_optional_choice(payload.status)

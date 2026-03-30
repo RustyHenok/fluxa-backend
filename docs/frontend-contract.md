@@ -131,6 +131,11 @@ Client expectation:
 ### Tasks
 
 - `GET /v1/dashboard/summary`
+- `GET /v1/projects`
+- `POST /v1/projects`
+- `GET /v1/projects/:project_id`
+- `PATCH /v1/projects/:project_id`
+- `DELETE /v1/projects/:project_id`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
 - `GET /v1/tasks/:task_id`
@@ -171,6 +176,13 @@ Recommended client behavior:
 - `medium`
 - `high`
 - `urgent`
+
+## Project Hierarchy
+
+- tasks may now include an optional `project_id`
+- `GET /v1/tasks` supports `project_id` filtering
+- `POST /v1/tasks` and `PATCH /v1/tasks/:task_id` may include `project_id`
+- project access stays tenant-scoped, just like task access
 
 ### Job status
 

@@ -115,6 +115,7 @@ pub fn validate_task_priority(value: &str) -> AppResult<TaskPriority> {
 pub struct TaskRecord {
     pub id: Uuid,
     pub tenant_id: Uuid,
+    pub project_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub status: String,
@@ -141,6 +142,7 @@ impl TaskRecord {
 pub struct TaskFilters {
     pub status: Option<TaskStatus>,
     pub priority: Option<TaskPriority>,
+    pub project_id: Option<Uuid>,
     pub assignee_id: Option<Uuid>,
     pub due_before: Option<DateTime<Utc>>,
     pub due_after: Option<DateTime<Utc>>,
@@ -157,6 +159,7 @@ impl TaskFilters {
         serde_json::json!({
             "status": self.status,
             "priority": self.priority,
+            "project_id": self.project_id,
             "assignee_id": self.assignee_id,
             "due_before": self.due_before,
             "due_after": self.due_after,
@@ -168,6 +171,7 @@ impl TaskFilters {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskInput {
+    pub project_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub status: Option<TaskStatus>,
@@ -188,6 +192,7 @@ impl CreateTaskInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdateTaskInput {
+    pub project_id: Option<Option<Uuid>>,
     pub title: Option<String>,
     pub description: Option<Option<String>>,
     pub status: Option<TaskStatus>,
@@ -243,6 +248,7 @@ pub struct DashboardSummary {
 pub struct TaskResponse {
     pub id: Uuid,
     pub tenant_id: Uuid,
+    pub project_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub status: TaskStatus,
@@ -273,6 +279,7 @@ impl TryFrom<&TaskRecord> for TaskResponse {
         Ok(Self {
             id: value.id,
             tenant_id: value.tenant_id,
+            project_id: value.project_id,
             title: value.title.clone(),
             description: value.description.clone(),
             status: value.parsed_status()?,

@@ -68,6 +68,16 @@ fn router(state: AppState) -> AppResult<Router> {
             get(handlers::list_tenant_members),
         )
         .route(
+            "/projects",
+            get(handlers::list_projects).post(handlers::create_project),
+        )
+        .route(
+            "/projects/:project_id",
+            get(handlers::get_project)
+                .patch(handlers::update_project)
+                .delete(handlers::delete_project),
+        )
+        .route(
             "/tasks",
             get(handlers::list_tasks).post(handlers::create_task),
         )

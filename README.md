@@ -4,7 +4,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 
 ## Features
 
-- Public REST API for auth, tenant-aware task management, export jobs, health checks, and metrics
+- Public REST API for auth, tenant-aware projects and task management, export jobs, health checks, and metrics
 - Internal gRPC API for job administration and task read access
 - PostgreSQL-backed system of record with committed SQLx migrations
 - Redis-backed caching, idempotency handling, rate limiting, and job queue coordination
@@ -22,6 +22,11 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - `GET /v1/me`
 - `GET /v1/me/tenants`
 - `GET /v1/tenants/:tenant_id/members`
+- `GET /v1/projects`
+- `POST /v1/projects`
+- `GET /v1/projects/:project_id`
+- `PATCH /v1/projects/:project_id`
+- `DELETE /v1/projects/:project_id`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
 - `GET /v1/tasks/:task_id`
@@ -74,7 +79,7 @@ Run the end-to-end smoke test after the stack is up:
 ./scripts/smoke_test.sh
 ```
 
-The script checks health and readiness, registers a tenant owner, exercises authenticated task CRUD paths, verifies task create idempotency, waits for an export job to complete, fetches the dedicated job result endpoint, and validates refresh plus logout. Set `BASE=http://127.0.0.1:18080` explicitly if you changed the published API port.
+The script checks health and readiness, registers a tenant owner, creates a project, exercises authenticated task CRUD paths under that project, verifies task create idempotency, waits for an export job to complete, fetches the dedicated job result endpoint, and validates refresh plus logout. Set `BASE=http://127.0.0.1:18080` explicitly if you changed the published API port.
 
 It also waits for the API to become ready, checks the standard error envelope on unauthorized requests, and confirms the Prometheus metrics endpoint is emitting request counters.
 

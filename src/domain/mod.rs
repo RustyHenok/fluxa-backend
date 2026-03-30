@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod jobs;
+pub mod projects;
 pub mod tasks;
 
 pub use auth::{
@@ -12,6 +13,7 @@ pub use jobs::{
     JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_TASK_EXPORT, JobResponse,
     JobResultResponse, JobStatus, JobType,
 };
+pub use projects::{CreateProjectInput, ProjectRecord, ProjectResponse, UpdateProjectInput};
 pub use tasks::{
     CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TASK_PRIORITY_HIGH,
     TASK_PRIORITY_LOW, TASK_PRIORITY_MEDIUM, TASK_PRIORITY_URGENT, TASK_STATUS_ARCHIVED,

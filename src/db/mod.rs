@@ -1,5 +1,6 @@
 mod jobs;
 mod memberships;
+mod projects;
 mod refresh_tokens;
 mod tasks;
 mod users;

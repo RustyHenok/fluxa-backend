@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 mod support;
 
 use support::{
-    TestServer, add_membership, create_task, poll_job_status, register_user, stack_test_guard,
-    wait_for_rest_job_completion,
+    TestServer, add_membership, create_project, create_task, poll_job_status, register_user,
+    stack_test_guard, wait_for_rest_job_completion,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -22,11 +22,20 @@ async fn rest_api_enforces_tenant_isolation() {
 
     let owner_a = register_user(&client, &server.http_base, "tenant-a").await;
     let owner_b = register_user(&client, &server.http_base, "tenant-b").await;
+    let project = create_project(
+        &client,
+        &server.http_base,
+        &owner_b.access_token,
+        "Tenant B project",
+    )
+    .await;
+    let project_id = project["id"].as_str().expect("project id should exist");
 
     let task = create_task(
         &client,
         &server.http_base,
         &owner_b.access_token,
+        Some(project_id),
         "Tenant B only task",
         "open",
         "high",
@@ -47,6 +56,14 @@ async fn rest_api_enforces_tenant_isolation() {
         .await
         .expect("error response should be json");
     assert_eq!(body["error"]["code"], "not_found");
+
+    let project_response = client
+        .get(format!("{}/v1/projects/{project_id}", server.http_base))
+        .bearer_auth(&owner_a.access_token)
+        .send()
+        .await
+        .expect("cross-tenant project fetch should return a response");
+    assert_eq!(project_response.status(), reqwest::StatusCode::NOT_FOUND);
 
     let owner_a_summary = client
         .get(format!("{}/v1/dashboard/summary", server.http_base))
@@ -171,6 +188,19 @@ async fn rest_api_enforces_tenant_isolation() {
 
     assert_eq!(switched_fetch.status(), reqwest::StatusCode::OK);
 
+    let switched_project = client
+        .get(format!("{}/v1/projects/{project_id}", server.http_base))
+        .bearer_auth(switched_access_token)
+        .send()
+        .await
+        .expect("switched tenant project fetch should return a response");
+    assert_eq!(switched_project.status(), reqwest::StatusCode::OK);
+    let switched_project: Value = switched_project
+        .json()
+        .await
+        .expect("switched project response should be json");
+    assert_eq!(switched_project["id"], project_id);
+
     let switched_summary = client
         .get(format!("{}/v1/dashboard/summary", server.http_base))
         .bearer_auth(switched_access_token)
@@ -289,6 +319,7 @@ async fn grpc_contracts_expose_tasks_and_jobs() {
         &client,
         &server.http_base,
         &owner.access_token,
+        None,
         "gRPC task",
         "open",
         "high",

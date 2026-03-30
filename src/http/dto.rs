@@ -42,6 +42,7 @@ pub(super) struct SwitchTenantRequest {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct TaskPayload {
+    pub(super) project_id: Option<Uuid>,
     pub(super) title: String,
     pub(super) description: Option<String>,
     pub(super) status: Option<String>,
@@ -52,6 +53,7 @@ pub(super) struct TaskPayload {
 
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct TaskPatchPayload {
+    pub(super) project_id: Option<Option<Uuid>>,
     pub(super) title: Option<String>,
     pub(super) description: Option<Option<String>>,
     pub(super) status: Option<String>,
@@ -66,6 +68,7 @@ pub(super) struct TaskListQuery {
     pub(super) cursor: Option<String>,
     pub(super) status: Option<String>,
     pub(super) priority: Option<String>,
+    pub(super) project_id: Option<Uuid>,
     pub(super) assignee_id: Option<Uuid>,
     pub(super) due_before: Option<String>,
     pub(super) due_after: Option<String>,
@@ -77,6 +80,7 @@ pub(super) struct TaskListQuery {
 pub(super) struct ExportRequest {
     pub(super) status: Option<String>,
     pub(super) priority: Option<String>,
+    pub(super) project_id: Option<Uuid>,
     pub(super) assignee_id: Option<Uuid>,
     pub(super) due_before: Option<String>,
     pub(super) due_after: Option<String>,
@@ -117,6 +121,18 @@ pub(super) struct TaskAuditListResponse {
     pub(super) next_cursor: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct ProjectPayload {
+    pub(super) name: String,
+    pub(super) description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(super) struct ProjectPatchPayload {
+    pub(super) name: Option<String>,
+    pub(super) description: Option<Option<String>>,
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct HealthResponse<'a> {
     pub(super) status: &'a str,
@@ -131,6 +147,7 @@ impl TaskListQuery {
             priority: normalize_optional_choice(self.priority)
                 .map(|value| validate_task_priority(&value))
                 .transpose()?,
+            project_id: self.project_id,
             assignee_id: self.assignee_id,
             due_before: parse_optional_datetime(self.due_before, "due_before")?,
             due_after: parse_optional_datetime(self.due_after, "due_after")?,
@@ -150,6 +167,7 @@ impl ExportRequest {
             priority: normalize_optional_choice(self.priority)
                 .map(|value| validate_task_priority(&value))
                 .transpose()?,
+            project_id: self.project_id,
             assignee_id: self.assignee_id,
             due_before: parse_optional_datetime(self.due_before, "due_before")?,
             due_after: parse_optional_datetime(self.due_after, "due_after")?,

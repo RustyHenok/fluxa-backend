@@ -20,6 +20,7 @@ pub fn document() -> Value {
             { "name": "system", "description": "Operational health and metrics endpoints." },
             { "name": "auth", "description": "Authentication and tenant session endpoints." },
             { "name": "tenants", "description": "Tenant-scoped membership endpoints." },
+            { "name": "projects", "description": "Tenant-scoped project hierarchy endpoints." },
             { "name": "tasks", "description": "Task CRUD, filtering, and audit endpoints." },
             { "name": "jobs", "description": "Background job creation, status, and results." }
         ],
@@ -206,6 +207,87 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/projects": {
+                "get": {
+                    "tags": ["projects"],
+                    "operationId": "listProjects",
+                    "summary": "List tenant projects",
+                    "responses": {
+                        "200": {
+                            "description": "Tenant projects.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("ProjectResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["projects"],
+                    "operationId": "createProject",
+                    "summary": "Create a project",
+                    "requestBody": json_request_body(schema_ref("ProjectPayload"), true),
+                    "responses": {
+                        "201": json_response("Project created.", schema_ref("ProjectResponse")),
+                        "400": error_response("Invalid project payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot create projects."),
+                        "409": error_response("A project with this name already exists."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/projects/{project_id}": {
+                "get": {
+                    "tags": ["projects"],
+                    "operationId": "getProject",
+                    "summary": "Get a single project",
+                    "parameters": [
+                        path_uuid_parameter("project_id", "Project identifier.")
+                    ],
+                    "responses": {
+                        "200": json_response("Project detail.", schema_ref("ProjectResponse")),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Project was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "patch": {
+                    "tags": ["projects"],
+                    "operationId": "updateProject",
+                    "summary": "Update a project",
+                    "parameters": [
+                        path_uuid_parameter("project_id", "Project identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("ProjectPatchPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated project detail.", schema_ref("ProjectResponse")),
+                        "400": error_response("Invalid project patch payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot update projects."),
+                        "404": error_response("Project was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["projects"],
+                    "operationId": "deleteProject",
+                    "summary": "Delete a project",
+                    "parameters": [
+                        path_uuid_parameter("project_id", "Project identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Project deleted."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot delete projects."),
+                        "404": error_response("Project was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/tasks": {
                 "get": {
                     "tags": ["tasks"],
@@ -216,6 +298,7 @@ pub fn document() -> Value {
                         cursor_query_parameter("cursor", "Opaque cursor from a previous task page."),
                         query_parameter("status", false, "Filter by task status.", schema_ref("TaskStatus")),
                         query_parameter("priority", false, "Filter by task priority.", schema_ref("TaskPriority")),
+                        query_parameter("project_id", false, "Filter by project.", uuid_schema()),
                         query_parameter("assignee_id", false, "Filter by assignee.", uuid_schema()),
                         query_parameter("due_before", false, "Return tasks due before this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("due_after", false, "Return tasks due after this RFC3339 timestamp.", date_time_schema()),
@@ -447,6 +530,44 @@ pub fn document() -> Value {
                         "joined_at": date_time_schema()
                     }
                 },
+                "ProjectPayload": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": string_schema(),
+                        "description": nullable(string_schema())
+                    }
+                },
+                "ProjectPatchPayload": {
+                    "type": "object",
+                    "properties": {
+                        "name": string_schema(),
+                        "description": nullable(string_schema())
+                    }
+                },
+                "ProjectResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "tenant_id",
+                        "name",
+                        "description",
+                        "created_by",
+                        "updated_by",
+                        "created_at",
+                        "updated_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "tenant_id": uuid_schema(),
+                        "name": string_schema(),
+                        "description": nullable(string_schema()),
+                        "created_by": uuid_schema(),
+                        "updated_by": uuid_schema(),
+                        "created_at": date_time_schema(),
+                        "updated_at": date_time_schema()
+                    }
+                },
                 "RegisterRequest": {
                     "type": "object",
                     "required": ["email", "password"],
@@ -533,6 +654,7 @@ pub fn document() -> Value {
                     "type": "object",
                     "required": ["title"],
                     "properties": {
+                        "project_id": nullable(uuid_schema()),
                         "title": string_schema(),
                         "description": nullable(string_schema()),
                         "status": schema_ref("TaskStatus"),
@@ -544,6 +666,7 @@ pub fn document() -> Value {
                 "TaskPatchPayload": {
                     "type": "object",
                     "properties": {
+                        "project_id": nullable(uuid_schema()),
                         "title": string_schema(),
                         "description": nullable(string_schema()),
                         "status": schema_ref("TaskStatus"),
@@ -557,6 +680,7 @@ pub fn document() -> Value {
                     "required": [
                         "id",
                         "tenant_id",
+                        "project_id",
                         "title",
                         "description",
                         "status",
@@ -571,6 +695,7 @@ pub fn document() -> Value {
                     "properties": {
                         "id": uuid_schema(),
                         "tenant_id": uuid_schema(),
+                        "project_id": nullable(uuid_schema()),
                         "title": string_schema(),
                         "description": nullable(string_schema()),
                         "status": schema_ref("TaskStatus"),
@@ -625,6 +750,7 @@ pub fn document() -> Value {
                     "properties": {
                         "status": schema_ref("TaskStatus"),
                         "priority": schema_ref("TaskPriority"),
+                        "project_id": uuid_schema(),
                         "assignee_id": uuid_schema(),
                         "due_before": date_time_schema(),
                         "due_after": date_time_schema(),
@@ -637,6 +763,7 @@ pub fn document() -> Value {
                     "properties": {
                         "status": schema_ref("TaskStatus"),
                         "priority": schema_ref("TaskPriority"),
+                        "project_id": uuid_schema(),
                         "assignee_id": uuid_schema(),
                         "due_before": date_time_schema(),
                         "due_after": date_time_schema(),
@@ -910,5 +1037,12 @@ mod tests {
     fn document_includes_job_result_endpoint() {
         let document = document();
         assert!(document["paths"]["/v1/jobs/{job_id}/result"].is_object());
+    }
+
+    #[test]
+    fn document_includes_project_endpoints() {
+        let document = document();
+        assert!(document["paths"]["/v1/projects"].is_object());
+        assert!(document["paths"]["/v1/projects/{project_id}"].is_object());
     }
 }

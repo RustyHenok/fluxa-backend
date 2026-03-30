@@ -123,6 +123,7 @@ pub async fn create_task(
     actor_id: Uuid,
     input: CreateTaskInput,
 ) -> AppResult<TaskRecord> {
+    ensure_project_belongs_to_tenant(state, tenant_id, input.project_id).await?;
     let task = state.db.create_task(tenant_id, actor_id, input).await?;
     state.cache.bump_tenant_cache_version(tenant_id).await?;
     Ok(task)
@@ -135,6 +136,9 @@ pub async fn update_task(
     actor_id: Uuid,
     input: UpdateTaskInput,
 ) -> AppResult<TaskRecord> {
+    if let Some(project_id) = input.project_id {
+        ensure_project_belongs_to_tenant(state, tenant_id, project_id).await?;
+    }
     let task = state
         .db
         .update_task(tenant_id, task_id, actor_id, input)
@@ -165,4 +169,22 @@ pub async fn export_tasks(
 
 pub async fn record_due_reminders(state: &AppState, tenant_id: Option<Uuid>) -> AppResult<usize> {
     state.db.record_due_reminders(tenant_id).await
+}
+
+async fn ensure_project_belongs_to_tenant(
+    state: &AppState,
+    tenant_id: Uuid,
+    project_id: Option<Uuid>,
+) -> AppResult<()> {
+    let Some(project_id) = project_id else {
+        return Ok(());
+    };
+
+    state
+        .db
+        .get_project(tenant_id, project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("project not found".into()))?;
+
+    Ok(())
 }

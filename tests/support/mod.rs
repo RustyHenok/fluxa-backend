@@ -199,10 +199,30 @@ pub async fn register_user(client: &Client, base: &str, label: &str) -> Register
     }
 }
 
+pub async fn create_project(client: &Client, base: &str, access_token: &str, name: &str) -> Value {
+    let response = client
+        .post(format!("{base}/v1/projects"))
+        .bearer_auth(access_token)
+        .json(&json!({
+            "name": name,
+            "description": "integration coverage",
+        }))
+        .send()
+        .await
+        .expect("create project request should succeed");
+
+    assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+    response
+        .json()
+        .await
+        .expect("project response should be json")
+}
+
 pub async fn create_task(
     client: &Client,
     base: &str,
     access_token: &str,
+    project_id: Option<&str>,
     title: &str,
     status: &str,
     priority: &str,
@@ -212,6 +232,7 @@ pub async fn create_task(
         .bearer_auth(access_token)
         .header("Idempotency-Key", format!("task-{}", Uuid::new_v4()))
         .json(&json!({
+            "project_id": project_id,
             "title": title,
             "description": "integration coverage",
             "status": status,

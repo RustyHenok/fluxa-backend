@@ -94,9 +94,21 @@ TENANTS_JSON="$(curl -sS "$BASE/v1/me/tenants" -H "Authorization: Bearer $ACCESS
 [[ "$(jq -r '.user.id' <<<"$ME_JSON")" == "$USER_ID" ]] || fail "/v1/me returned unexpected user"
 [[ "$(jq -r '.[0].tenant_id' <<<"$TENANTS_JSON")" == "$TENANT_ID" ]] || fail "/v1/me/tenants returned unexpected tenant"
 
+step "Create project"
+PROJECT_JSON="$(
+  curl -sS -X POST "$BASE/v1/projects" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d '{"name":"Smoke Project","description":"verify project hierarchy"}'
+)"
+PROJECT_ID="$(jq -er '.id' <<<"$PROJECT_JSON")"
+
+PROJECT_FETCH_JSON="$(curl -sS "$BASE/v1/projects/$PROJECT_ID" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.id' <<<"$PROJECT_FETCH_JSON")" == "$PROJECT_ID" ]] || fail "/v1/projects/:id returned unexpected project"
+
 step "Create task with idempotency replay"
 TASK_KEY="task-create-$(date +%s)-$RANDOM"
-TASK_PAYLOAD='{"title":"Smoke task","description":"verify patch and idempotency","status":"open","priority":"high"}'
+TASK_PAYLOAD="{\"project_id\":\"$PROJECT_ID\",\"title\":\"Smoke task\",\"description\":\"verify patch and idempotency\",\"status\":\"open\",\"priority\":\"high\"}"
 
 TASK_JSON="$(
   curl -sS -X POST "$BASE/v1/tasks" \
@@ -118,18 +130,20 @@ TASK_REPLAY_JSON="$(
 [[ "$(jq -r '.id' <<<"$TASK_REPLAY_JSON")" == "$TASK_ID" ]] || fail "task idempotency replay returned a different task id"
 
 step "List and patch task"
-LIST_JSON="$(curl -sS "$BASE/v1/tasks?limit=10&status=open&priority=high" -H "Authorization: Bearer $ACCESS_TOKEN")"
+LIST_JSON="$(curl -sS "$BASE/v1/tasks?limit=10&status=open&priority=high&project_id=$PROJECT_ID" -H "Authorization: Bearer $ACCESS_TOKEN")"
 [[ "$(jq -r '.data[0].id' <<<"$LIST_JSON")" == "$TASK_ID" ]] || fail "task list did not include created task"
+[[ "$(jq -r '.data[0].project_id' <<<"$LIST_JSON")" == "$PROJECT_ID" ]] || fail "task list did not include the expected project id"
 
 PATCH_JSON="$(
   curl -sS -X PATCH "$BASE/v1/tasks/$TASK_ID" \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
-    -H 'content-type: application/json' \
-    -d '{"status":"in_progress","priority":"urgent"}'
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'content-type: application/json' \
+  -d "{\"project_id\":\"$PROJECT_ID\",\"status\":\"in_progress\",\"priority\":\"urgent\"}"
 )"
 
 [[ "$(jq -r '.status' <<<"$PATCH_JSON")" == "in_progress" ]] || fail "task patch did not update status"
 [[ "$(jq -r '.priority' <<<"$PATCH_JSON")" == "urgent" ]] || fail "task patch did not update priority"
+[[ "$(jq -r '.project_id' <<<"$PATCH_JSON")" == "$PROJECT_ID" ]] || fail "task patch did not preserve project linkage"
 
 step "Verify task audit feed"
 AUDIT_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/audit?limit=10" -H "Authorization: Bearer $ACCESS_TOKEN")"
@@ -173,6 +187,7 @@ JOB_RESULT_JSON="$(curl -sS "$BASE/v1/jobs/$JOB_ID/result" -H "Authorization: Be
 [[ "$(jq -r '.job_type' <<<"$JOB_RESULT_JSON")" == "task_export" ]] || fail "job result endpoint returned an unexpected job type"
 [[ "$(jq -r '.result.task_count' <<<"$JOB_RESULT_JSON")" == "1" ]] || fail "job result endpoint returned an unexpected task count"
 [[ "$(jq -r '.result.tasks[0].id' <<<"$JOB_RESULT_JSON")" == "$TASK_ID" ]] || fail "job result endpoint did not include the expected task"
+[[ "$(jq -r '.result.tasks[0].project_id' <<<"$JOB_RESULT_JSON")" == "$PROJECT_ID" ]] || fail "job result endpoint did not include the expected project linkage"
 
 step "Refresh and logout"
 REFRESH_JSON="$(
@@ -201,5 +216,6 @@ grep -q 'http_requests_total' <<<"$METRICS_TEXT" || fail "/metrics did not inclu
 
 printf '\nSmoke test passed for %s\n' "$BASE"
 printf 'tenant_id=%s\n' "$TENANT_ID"
+printf 'project_id=%s\n' "$PROJECT_ID"
 printf 'task_id=%s\n' "$TASK_ID"
 printf 'job_id=%s\n' "$JOB_ID"
