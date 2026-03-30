@@ -78,6 +78,10 @@ fn router(state: AppState) -> AppResult<Router> {
                 .delete(handlers::delete_project),
         )
         .route(
+            "/projects/:project_id/summary",
+            get(handlers::get_project_summary),
+        )
+        .route(
             "/projects/:project_id/tasks",
             get(handlers::list_project_tasks),
         )

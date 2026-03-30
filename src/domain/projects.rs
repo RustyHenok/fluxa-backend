@@ -83,3 +83,14 @@ impl From<&ProjectRecord> for ProjectResponse {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ProjectSummary {
+    pub project_id: Uuid,
+    pub project_name: String,
+    pub open_task_count: i64,
+    pub in_progress_task_count: i64,
+    pub done_task_count: i64,
+    pub overdue_task_count: i64,
+    pub recent_activity_count: i64,
+}

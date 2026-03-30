@@ -65,6 +65,20 @@ async fn rest_api_enforces_tenant_isolation() {
         .expect("cross-tenant project fetch should return a response");
     assert_eq!(project_response.status(), reqwest::StatusCode::NOT_FOUND);
 
+    let project_summary_response = client
+        .get(format!(
+            "{}/v1/projects/{project_id}/summary",
+            server.http_base
+        ))
+        .bearer_auth(&owner_a.access_token)
+        .send()
+        .await
+        .expect("cross-tenant project summary should return a response");
+    assert_eq!(
+        project_summary_response.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+
     let project_tasks_response = client
         .get(format!(
             "{}/v1/projects/{project_id}/tasks?limit=10&status=open",
@@ -214,6 +228,28 @@ async fn rest_api_enforces_tenant_isolation() {
         .await
         .expect("switched project response should be json");
     assert_eq!(switched_project["id"], project_id);
+
+    let switched_project_summary = client
+        .get(format!(
+            "{}/v1/projects/{project_id}/summary",
+            server.http_base
+        ))
+        .bearer_auth(switched_access_token)
+        .send()
+        .await
+        .expect("switched project summary should return a response");
+    assert_eq!(switched_project_summary.status(), reqwest::StatusCode::OK);
+    let switched_project_summary: Value = switched_project_summary
+        .json()
+        .await
+        .expect("switched project summary should be json");
+    assert_eq!(switched_project_summary["project_id"], project_id);
+    assert_eq!(switched_project_summary["project_name"], "Tenant B project");
+    assert_eq!(switched_project_summary["open_task_count"], 1);
+    assert_eq!(switched_project_summary["in_progress_task_count"], 0);
+    assert_eq!(switched_project_summary["done_task_count"], 0);
+    assert_eq!(switched_project_summary["overdue_task_count"], 0);
+    assert_eq!(switched_project_summary["recent_activity_count"], 1);
 
     let switched_project_tasks = client
         .get(format!(

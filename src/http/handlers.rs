@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::cache::StoredResponse;
 use crate::domain::{
     CreateProjectInput, CreateTaskInput, DashboardSummary, JobResponse, JobResultResponse,
-    ProjectResponse, TaskAuditResponse, TaskResponse, TenantMemberResponse,
+    ProjectResponse, ProjectSummary, TaskAuditResponse, TaskResponse, TenantMemberResponse,
     TenantMembershipResponse, UpdateProjectInput, UpdateTaskInput, UserResponse,
     validate_task_priority, validate_task_status,
 };
@@ -200,6 +200,15 @@ pub(super) async fn get_project(
 ) -> AppResult<Json<ProjectResponse>> {
     let project = project_service::get_project(&state, user.tenant_id, project_id).await?;
     Ok(Json(ProjectResponse::from(&project)))
+}
+
+pub(super) async fn get_project_summary(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(project_id): Path<Uuid>,
+) -> AppResult<Json<ProjectSummary>> {
+    let summary = project_service::project_summary(&state, user.tenant_id, project_id).await?;
+    Ok(Json(summary))
 }
 
 pub(super) async fn list_project_tasks(

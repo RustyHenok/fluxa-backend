@@ -13,7 +13,9 @@ pub use jobs::{
     JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_TASK_EXPORT, JobResponse,
     JobResultResponse, JobStatus, JobType,
 };
-pub use projects::{CreateProjectInput, ProjectRecord, ProjectResponse, UpdateProjectInput};
+pub use projects::{
+    CreateProjectInput, ProjectRecord, ProjectResponse, ProjectSummary, UpdateProjectInput,
+};
 pub use tasks::{
     CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TASK_PRIORITY_HIGH,
     TASK_PRIORITY_LOW, TASK_PRIORITY_MEDIUM, TASK_PRIORITY_URGENT, TASK_STATUS_ARCHIVED,

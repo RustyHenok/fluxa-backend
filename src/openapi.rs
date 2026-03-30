@@ -288,6 +288,22 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/projects/{project_id}/summary": {
+                "get": {
+                    "tags": ["projects"],
+                    "operationId": "getProjectSummary",
+                    "summary": "Get task summary counts for a single project",
+                    "parameters": [
+                        path_uuid_parameter("project_id", "Project identifier.")
+                    ],
+                    "responses": {
+                        "200": json_response("Project summary counts.", schema_ref("ProjectSummary")),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Project was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/projects/{project_id}/tasks": {
                 "get": {
                     "tags": ["projects"],
@@ -592,6 +608,27 @@ pub fn document() -> Value {
                         "updated_by": uuid_schema(),
                         "created_at": date_time_schema(),
                         "updated_at": date_time_schema()
+                    }
+                },
+                "ProjectSummary": {
+                    "type": "object",
+                    "required": [
+                        "project_id",
+                        "project_name",
+                        "open_task_count",
+                        "in_progress_task_count",
+                        "done_task_count",
+                        "overdue_task_count",
+                        "recent_activity_count"
+                    ],
+                    "properties": {
+                        "project_id": uuid_schema(),
+                        "project_name": string_schema(),
+                        "open_task_count": int64_schema(),
+                        "in_progress_task_count": int64_schema(),
+                        "done_task_count": int64_schema(),
+                        "overdue_task_count": int64_schema(),
+                        "recent_activity_count": int64_schema()
                     }
                 },
                 "RegisterRequest": {
@@ -1070,6 +1107,7 @@ mod tests {
         let document = document();
         assert!(document["paths"]["/v1/projects"].is_object());
         assert!(document["paths"]["/v1/projects/{project_id}"].is_object());
+        assert!(document["paths"]["/v1/projects/{project_id}/summary"].is_object());
         assert!(document["paths"]["/v1/projects/{project_id}/tasks"].is_object());
     }
 }

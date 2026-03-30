@@ -438,6 +438,47 @@
         ],
         "type": "object"
       },
+      "ProjectSummary": {
+        "properties": {
+          "done_task_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "in_progress_task_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "open_task_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "overdue_task_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "recent_activity_count": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "project_name",
+          "open_task_count",
+          "in_progress_task_count",
+          "done_task_count",
+          "overdue_task_count",
+          "recent_activity_count"
+        ],
+        "type": "object"
+      },
       "RefreshRequest": {
         "properties": {
           "refresh_token": {
@@ -2012,6 +2053,69 @@
           }
         },
         "summary": "Update a project",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/summary": {
+      "get": {
+        "operationId": "getProjectSummary",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSummary"
+                }
+              }
+            },
+            "description": "Project summary counts."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Project was not found."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Get task summary counts for a single project",
         "tags": [
           "projects"
         ]

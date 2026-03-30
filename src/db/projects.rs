@@ -3,7 +3,7 @@ use sqlx::{Encode, Postgres, QueryBuilder, Type};
 use uuid::Uuid;
 
 use super::Database;
-use crate::domain::{CreateProjectInput, ProjectRecord, UpdateProjectInput};
+use crate::domain::{CreateProjectInput, ProjectRecord, ProjectSummary, UpdateProjectInput};
 use crate::error::{AppError, AppResult};
 
 impl Database {
@@ -67,6 +67,49 @@ impl Database {
             SELECT id, tenant_id, name, description, created_by, updated_by, created_at, updated_at
             FROM projects
             WHERE tenant_id = $1 AND id = $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(project_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::from)
+    }
+
+    pub async fn project_summary(
+        &self,
+        tenant_id: Uuid,
+        project_id: Uuid,
+    ) -> AppResult<Option<ProjectSummary>> {
+        sqlx::query_as::<_, ProjectSummary>(
+            r#"
+            SELECT
+                p.id AS project_id,
+                p.name AS project_name,
+                COUNT(t.id) FILTER (WHERE t.status = 'open')::BIGINT AS open_task_count,
+                COUNT(t.id) FILTER (WHERE t.status = 'in_progress')::BIGINT AS in_progress_task_count,
+                COUNT(t.id) FILTER (WHERE t.status = 'done')::BIGINT AS done_task_count,
+                COUNT(t.id) FILTER (
+                    WHERE t.due_at IS NOT NULL
+                      AND t.due_at <= now()
+                      AND t.status NOT IN ('done', 'archived')
+                )::BIGINT AS overdue_task_count,
+                (
+                    SELECT COUNT(*)::BIGINT
+                    FROM task_audit_log audit
+                    INNER JOIN tasks audited_task
+                        ON audited_task.id = audit.task_id
+                       AND audited_task.tenant_id = audit.tenant_id
+                    WHERE audit.tenant_id = p.tenant_id
+                      AND audited_task.project_id = p.id
+                      AND audit.created_at >= now() - interval '7 days'
+                ) AS recent_activity_count
+            FROM projects p
+            LEFT JOIN tasks t
+                ON t.project_id = p.id
+               AND t.tenant_id = p.tenant_id
+            WHERE p.tenant_id = $1 AND p.id = $2
+            GROUP BY p.id, p.name
             "#,
         )
         .bind(tenant_id)

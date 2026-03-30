@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::domain::{CreateProjectInput, ProjectRecord, UpdateProjectInput};
+use crate::domain::{CreateProjectInput, ProjectRecord, ProjectSummary, UpdateProjectInput};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -29,6 +29,18 @@ pub async fn create_project(
     let project = state.db.create_project(tenant_id, actor_id, input).await?;
     state.cache.bump_tenant_cache_version(tenant_id).await?;
     Ok(project)
+}
+
+pub async fn project_summary(
+    state: &AppState,
+    tenant_id: Uuid,
+    project_id: Uuid,
+) -> AppResult<ProjectSummary> {
+    state
+        .db
+        .project_summary(tenant_id, project_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("project not found".into()))
 }
 
 pub async fn update_project(

@@ -138,6 +138,13 @@ PROJECT_TASKS_JSON="$(curl -sS "$BASE/v1/projects/$PROJECT_ID/tasks?limit=10&sta
 [[ "$(jq -r '.data[0].id' <<<"$PROJECT_TASKS_JSON")" == "$TASK_ID" ]] || fail "project tasks endpoint did not include created task"
 [[ "$(jq -r '.data[0].project_id' <<<"$PROJECT_TASKS_JSON")" == "$PROJECT_ID" ]] || fail "project tasks endpoint returned an unexpected project id"
 
+PROJECT_SUMMARY_OPEN_JSON="$(curl -sS "$BASE/v1/projects/$PROJECT_ID/summary" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.project_id' <<<"$PROJECT_SUMMARY_OPEN_JSON")" == "$PROJECT_ID" ]] || fail "project summary returned an unexpected project id"
+[[ "$(jq -r '.project_name' <<<"$PROJECT_SUMMARY_OPEN_JSON")" == "Smoke Project" ]] || fail "project summary returned an unexpected project name"
+[[ "$(jq -r '.open_task_count' <<<"$PROJECT_SUMMARY_OPEN_JSON")" == "1" ]] || fail "project summary returned unexpected open task count before patch"
+[[ "$(jq -r '.in_progress_task_count' <<<"$PROJECT_SUMMARY_OPEN_JSON")" == "0" ]] || fail "project summary returned unexpected in-progress count before patch"
+[[ "$(jq -r '.recent_activity_count' <<<"$PROJECT_SUMMARY_OPEN_JSON")" == "1" ]] || fail "project summary returned unexpected recent activity count before patch"
+
 PATCH_JSON="$(
   curl -sS -X PATCH "$BASE/v1/tasks/$TASK_ID" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
@@ -148,6 +155,13 @@ PATCH_JSON="$(
 [[ "$(jq -r '.status' <<<"$PATCH_JSON")" == "in_progress" ]] || fail "task patch did not update status"
 [[ "$(jq -r '.priority' <<<"$PATCH_JSON")" == "urgent" ]] || fail "task patch did not update priority"
 [[ "$(jq -r '.project_id' <<<"$PATCH_JSON")" == "$PROJECT_ID" ]] || fail "task patch did not preserve project linkage"
+
+PROJECT_SUMMARY_PATCHED_JSON="$(curl -sS "$BASE/v1/projects/$PROJECT_ID/summary" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.open_task_count' <<<"$PROJECT_SUMMARY_PATCHED_JSON")" == "0" ]] || fail "project summary returned unexpected open task count after patch"
+[[ "$(jq -r '.in_progress_task_count' <<<"$PROJECT_SUMMARY_PATCHED_JSON")" == "1" ]] || fail "project summary returned unexpected in-progress count after patch"
+[[ "$(jq -r '.done_task_count' <<<"$PROJECT_SUMMARY_PATCHED_JSON")" == "0" ]] || fail "project summary returned unexpected done count after patch"
+[[ "$(jq -r '.overdue_task_count' <<<"$PROJECT_SUMMARY_PATCHED_JSON")" == "0" ]] || fail "project summary returned unexpected overdue count after patch"
+[[ "$(jq -r '.recent_activity_count' <<<"$PROJECT_SUMMARY_PATCHED_JSON")" == "2" ]] || fail "project summary returned unexpected recent activity count after patch"
 
 step "Verify task audit feed"
 AUDIT_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/audit?limit=10" -H "Authorization: Bearer $ACCESS_TOKEN")"
