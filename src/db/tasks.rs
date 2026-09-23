@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use super::Database;
 use crate::domain::{
-    CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TaskAuditRecord,
-    TaskFilters, TaskPriority, TaskRecord, TaskStatus, UpdateTaskInput,
+    CreateTaskInput, DashboardSummary, DueReminderCandidate, PaginatedTaskAudit, PaginatedTasks,
+    TaskAuditRecord, TaskFilters, TaskPriority, TaskRecord, TaskStatus, UpdateTaskInput,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
@@ -381,6 +381,7 @@ impl Database {
         &self,
         tenant_id: Uuid,
         filters: &TaskFilters,
+        cursor: Option<&Cursor>,
         limit: usize,
     ) -> AppResult<Vec<TaskRecord>> {
         let mut builder = QueryBuilder::<Postgres>::new(
@@ -391,7 +392,7 @@ impl Database {
             WHERE tenant_id = "#,
         );
         builder.push_bind(tenant_id);
-        apply_task_filters(&mut builder, filters, None);
+        apply_task_filters(&mut builder, filters, cursor);
         builder.push(" ORDER BY updated_at DESC, id DESC LIMIT ");
         builder.push_bind(limit as i64);
 
@@ -400,6 +401,36 @@ impl Database {
             .fetch_all(&self.pool)
             .await
             .map_err(AppError::from)
+    }
+
+    /// Lists tasks with an assignee that are overdue or due within the given
+    /// window, joined with the assignee's email for notification delivery.
+    pub async fn list_due_reminder_candidates(
+        &self,
+        window_hours: i64,
+        limit: i64,
+        tenant_id: Option<Uuid>,
+    ) -> AppResult<Vec<DueReminderCandidate>> {
+        sqlx::query_as::<_, DueReminderCandidate>(
+            r#"
+            SELECT t.id AS task_id, t.tenant_id, t.title, t.due_at, t.assignee_id, u.email
+            FROM tasks t
+            JOIN users u ON u.id = t.assignee_id
+            WHERE t.due_at IS NOT NULL
+              AND t.assignee_id IS NOT NULL
+              AND t.due_at <= now() + make_interval(hours => $1)
+              AND t.status NOT IN ('done', 'archived')
+              AND ($3::uuid IS NULL OR t.tenant_id = $3)
+            ORDER BY t.due_at ASC
+            LIMIT $2
+            "#,
+        )
+        .bind(window_hours)
+        .bind(limit)
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::from)
     }
 
     pub async fn record_due_reminders(&self, tenant_id: Option<Uuid>) -> AppResult<usize> {

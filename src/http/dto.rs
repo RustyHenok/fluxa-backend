@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::{
-    InvitationResponse, TaskAuditResponse, TaskFilters, TaskResponse, TenantMembershipResponse,
-    UserResponse, validate_task_priority, validate_task_status,
+    ExportFormat, InvitationResponse, TaskAuditResponse, TaskFilters, TaskResponse,
+    TenantMembershipResponse, UserResponse, validate_task_priority, validate_task_status,
 };
 use crate::error::AppResult;
 
@@ -109,6 +109,46 @@ pub(super) struct ExportRequest {
     pub(super) due_after: Option<String>,
     pub(super) updated_after: Option<String>,
     pub(super) q: Option<String>,
+    pub(super) format: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct VerifyEmailPayload {
+    pub(super) token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ResendVerificationPayload {
+    pub(super) email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct PasswordResetRequestPayload {
+    pub(super) email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct PasswordResetConfirmPayload {
+    pub(super) token: String,
+    pub(super) new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ChangePasswordPayload {
+    pub(super) current_password: String,
+    pub(super) new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ChangeEmailPayload {
+    pub(super) current_password: String,
+    pub(super) new_email: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub(super) struct AuditListQuery {
+    pub(super) limit: Option<usize>,
+    pub(super) cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,6 +222,13 @@ impl TaskListQuery {
 }
 
 impl ExportRequest {
+    pub(super) fn export_format(&self) -> AppResult<ExportFormat> {
+        match normalize_optional_choice(self.format.clone()) {
+            Some(value) => value.parse(),
+            None => Ok(ExportFormat::default()),
+        }
+    }
+
     pub(super) fn into_filters(self) -> AppResult<TaskFilters> {
         TaskFilters {
             status: normalize_optional_choice(self.status)

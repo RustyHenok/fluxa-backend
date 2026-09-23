@@ -1,12 +1,13 @@
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{Duration as ChronoDuration, Utc};
-use sha2::{Digest, Sha256};
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::domain::{InvitationRecord, MembershipRecord, MembershipRole, TenantMemberRecord};
 use crate::error::{AppError, AppResult};
+use crate::notify::KIND_TENANT_INVITATION;
+use crate::services::audit;
 use crate::state::AppState;
+use crate::tokens::{generate_token, hash_token};
 
 #[derive(Debug, Clone)]
 pub struct CreatedInvitation {
@@ -55,7 +56,7 @@ pub async fn create_invitation(
         ));
     }
 
-    let token = generate_invitation_token();
+    let token = generate_token();
     let expires_at = Utc::now()
         + ChronoDuration::from_std(state.config.invitation_ttl())
             .map_err(|error| AppError::internal(format!("invalid invitation ttl: {error}")))?;
@@ -66,7 +67,7 @@ pub async fn create_invitation(
             tenant_id,
             email,
             role.as_str(),
-            &hash_invitation_token(&token),
+            &hash_token(&token),
             expires_at,
             actor_user_id,
         )
@@ -77,6 +78,39 @@ pub async fn create_invitation(
             }
             other => other,
         })?;
+
+    let enqueued = state
+        .db
+        .enqueue_notification(
+            &crate::domain::NewNotification {
+                tenant_id: Some(tenant_id),
+                user_id: None,
+                kind: KIND_TENANT_INVITATION.into(),
+                recipient: email.to_owned(),
+                payload: json!({
+                    "role": role.as_str(),
+                    "token": token,
+                    "expires_at": expires_at.to_rfc3339(),
+                }),
+                dedupe_key: None,
+            },
+            state.config.max_job_attempts,
+        )
+        .await;
+    if let Err(error) = enqueued {
+        tracing::warn!("failed to enqueue invitation notification: {error}");
+    }
+
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(actor_user_id),
+        "invitation",
+        Some(invitation.id),
+        "invitation.created",
+        json!({ "email": email, "role": role.as_str() }),
+    )
+    .await;
 
     Ok(CreatedInvitation { invitation, token })
 }
@@ -91,9 +125,21 @@ pub async fn list_invitations(
 pub async fn revoke_invitation(
     state: &AppState,
     tenant_id: Uuid,
+    actor_user_id: Uuid,
     invitation_id: Uuid,
 ) -> AppResult<()> {
-    state.db.revoke_invitation(tenant_id, invitation_id).await
+    state.db.revoke_invitation(tenant_id, invitation_id).await?;
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(actor_user_id),
+        "invitation",
+        Some(invitation_id),
+        "invitation.revoked",
+        json!({}),
+    )
+    .await;
+    Ok(())
 }
 
 /// Accepts an invitation token on behalf of the calling user. The invitation
@@ -105,15 +151,23 @@ pub async fn accept_invitation(
     token: &str,
 ) -> AppResult<MembershipRecord> {
     let user = state.db.get_user_by_id(user_id).await?;
-    state
+    let membership = state
         .db
-        .accept_invitation(
-            tenant_id,
-            &hash_invitation_token(token),
-            user.id,
-            &user.email,
-        )
-        .await
+        .accept_invitation(tenant_id, &hash_token(token), user.id, &user.email)
+        .await?;
+
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(user_id),
+        "membership",
+        Some(user_id),
+        "invitation.accepted",
+        json!({ "role": membership.role }),
+    )
+    .await;
+
+    Ok(membership)
 }
 
 /// Updates a member's role. Only owners may grant or revoke the `owner` and
@@ -122,6 +176,7 @@ pub async fn update_member_role(
     state: &AppState,
     tenant_id: Uuid,
     actor_role: MembershipRole,
+    actor_user_id: Uuid,
     target_user_id: Uuid,
     new_role: MembershipRole,
 ) -> AppResult<TenantMemberRecord> {
@@ -150,11 +205,24 @@ pub async fn update_member_role(
         ));
     }
 
-    state
+    let updated = state
         .db
         .update_membership_role(tenant_id, target_user_id, new_role.as_str())
         .await?
-        .ok_or_else(|| AppError::NotFound("member not found".into()))
+        .ok_or_else(|| AppError::NotFound("member not found".into()))?;
+
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(actor_user_id),
+        "membership",
+        Some(target_user_id),
+        "member.role_updated",
+        json!({ "from": current_role.as_str(), "to": new_role.as_str() }),
+    )
+    .await;
+
+    Ok(updated)
 }
 
 /// Removes a member from the tenant, revoking the member's refresh tokens for
@@ -163,6 +231,7 @@ pub async fn remove_member(
     state: &AppState,
     tenant_id: Uuid,
     actor_role: MembershipRole,
+    actor_user_id: Uuid,
     target_user_id: Uuid,
 ) -> AppResult<()> {
     let target = state
@@ -197,34 +266,18 @@ pub async fn remove_member(
     state
         .db
         .revoke_user_tenant_refresh_tokens(target_user_id, tenant_id)
-        .await
-}
+        .await?;
 
-fn generate_invitation_token() -> String {
-    let mut bytes = [0u8; 32];
-    use argon2::password_hash::rand_core::{OsRng, RngCore};
-    OsRng.fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
-}
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(actor_user_id),
+        "membership",
+        Some(target_user_id),
+        "member.removed",
+        json!({ "role": target_role.as_str() }),
+    )
+    .await;
 
-fn hash_invitation_token(token: &str) -> String {
-    let digest = Sha256::digest(token.as_bytes());
-    format!("{digest:x}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{generate_invitation_token, hash_invitation_token};
-
-    #[test]
-    fn tokens_are_unique_and_hash_deterministically() {
-        let first = generate_invitation_token();
-        let second = generate_invitation_token();
-        assert_ne!(first, second);
-        assert_eq!(hash_invitation_token(&first), hash_invitation_token(&first));
-        assert_ne!(
-            hash_invitation_token(&first),
-            hash_invitation_token(&second)
-        );
-    }
+    Ok(())
 }

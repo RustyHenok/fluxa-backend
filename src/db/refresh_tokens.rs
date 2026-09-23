@@ -125,4 +125,19 @@ impl Database {
         .await?;
         Ok(())
     }
+
+    pub async fn revoke_all_user_refresh_tokens(&self, user_id: Uuid) -> AppResult<()> {
+        sqlx::query(
+            r#"
+            UPDATE refresh_tokens
+            SET revoked_at = COALESCE(revoked_at, $2)
+            WHERE user_id = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }

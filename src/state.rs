@@ -7,6 +7,7 @@ use crate::auth::AuthService;
 use crate::cache::CacheStore;
 use crate::config::SharedConfig;
 use crate::db::Database;
+use crate::storage::AnyArtifactStore;
 
 #[derive(Clone, FromRef)]
 pub struct AppState {
@@ -15,6 +16,7 @@ pub struct AppState {
     pub cache: CacheStore,
     pub auth: AuthService,
     pub metrics: MetricsHandle,
+    pub storage: AnyArtifactStore,
 }
 
 #[derive(Clone)]
@@ -42,12 +44,14 @@ impl AppState {
         auth: AuthService,
         metrics: PrometheusHandle,
     ) -> Self {
+        let storage = AnyArtifactStore::from_config(&config);
         Self {
             config,
             db,
             cache,
             auth,
             metrics: MetricsHandle::new(metrics),
+            storage,
         }
     }
 }

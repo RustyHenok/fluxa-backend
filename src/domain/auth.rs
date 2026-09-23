@@ -63,6 +63,7 @@ pub struct UserRecord {
     pub id: Uuid,
     pub email: String,
     pub password_hash: String,
+    pub email_verified_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -144,6 +145,7 @@ impl TryFrom<&InvitationRecord> for InvitationResponse {
 pub struct UserResponse {
     pub id: Uuid,
     pub email: String,
+    pub email_verified: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -152,6 +154,7 @@ impl From<&UserRecord> for UserResponse {
         Self {
             id: value.id,
             email: value.email.clone(),
+            email_verified: value.email_verified_at.is_some(),
             created_at: value.created_at,
         }
     }
@@ -197,4 +200,18 @@ impl TryFrom<&TenantMemberRecord> for TenantMemberResponse {
             joined_at: value.joined_at,
         })
     }
+}
+
+pub const TOKEN_KIND_EMAIL_VERIFICATION: &str = "email_verification";
+pub const TOKEN_KIND_PASSWORD_RESET: &str = "password_reset";
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct UserTokenRecord {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub kind: String,
+    pub token_hash: String,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
 }

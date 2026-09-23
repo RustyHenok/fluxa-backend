@@ -174,6 +174,16 @@ mod tests {
                 cors_allow_origin: "*".into(),
                 startup_max_retries: 3,
                 startup_retry_delay_ms: 100,
+                mailer_provider: "noop".into(),
+                smtp_url: None,
+                mail_from: None,
+                notify_dispatch_interval_ms: 1000,
+                require_email_verification: false,
+                email_verification_ttl_hours: 24,
+                password_reset_ttl_minutes: 60,
+                reminder_due_soon_hours: 24,
+                reminder_dedupe_ttl_hours: 24,
+                artifact_storage_dir: "data/exports".into(),
             }
             .validate()
             .unwrap(),
@@ -187,6 +197,7 @@ mod tests {
             id: Uuid::new_v4(),
             email: "test@example.com".into(),
             password_hash: "hash".into(),
+            email_verified_at: None,
             created_at: Utc::now(),
         };
         let membership = MembershipRecord {

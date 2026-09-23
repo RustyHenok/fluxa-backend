@@ -14,6 +14,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 dotenvy = "0.15"
 http = "1.3"
 jsonwebtoken = "9.3"
+lettre = { version = "0.11.22", default-features = false, features = ["builder", "hostname", "pool", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
 once_cell = "1.21"

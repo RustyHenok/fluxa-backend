@@ -1,4 +1,5 @@
 mod dispatch;
+mod notifier;
 mod processor;
 mod reaper;
 mod runner;

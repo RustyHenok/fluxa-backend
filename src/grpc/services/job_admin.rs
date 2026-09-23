@@ -1,5 +1,6 @@
 use tonic::{Request, Response, Status};
 
+use crate::domain::ExportFormat;
 use crate::services::jobs as jobs_service;
 use crate::state::AppState;
 
@@ -42,9 +43,15 @@ impl JobAdmin for JobAdminService {
             option_string(payload.q),
         )?;
 
-        let job = jobs_service::create_export_job(&self.state, tenant_id, requested_by, &filters)
-            .await
-            .map_err(status_from_error)?;
+        let job = jobs_service::create_export_job(
+            &self.state,
+            tenant_id,
+            requested_by,
+            &filters,
+            ExportFormat::default(),
+        )
+        .await
+        .map_err(status_from_error)?;
 
         Ok(Response::new(job_to_proto(&job)))
     }

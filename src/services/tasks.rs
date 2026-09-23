@@ -162,9 +162,13 @@ pub async fn export_tasks(
     state: &AppState,
     tenant_id: Uuid,
     filters: &TaskFilters,
+    cursor: Option<&Cursor>,
     limit: usize,
 ) -> AppResult<Vec<TaskRecord>> {
-    state.db.export_tasks(tenant_id, filters, limit).await
+    state
+        .db
+        .export_tasks(tenant_id, filters, cursor, limit)
+        .await
 }
 
 pub async fn record_due_reminders(state: &AppState, tenant_id: Option<Uuid>) -> AppResult<usize> {

@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::response::IntoResponse;
 use serde_json::Value;
 use uuid::Uuid;
@@ -10,25 +10,29 @@ use uuid::Uuid;
 use crate::cache::StoredResponse;
 use crate::domain::{
     CreateProjectInput, CreateTaskInput, DashboardSummary, InvitationResponse, JobResponse,
-    JobResultResponse, ProjectResponse, ProjectSummary, TaskAuditResponse, TaskResponse,
-    TenantMemberResponse, TenantMembershipResponse, UpdateProjectInput, UpdateTaskInput,
-    UserResponse, validate_role, validate_task_priority, validate_task_status,
+    JobResultResponse, PaginatedAuditEvents, ProjectResponse, ProjectSummary, TaskAuditResponse,
+    TaskResponse, TenantMemberResponse, TenantMembershipResponse, UpdateProjectInput,
+    UpdateTaskInput, UserResponse, validate_role, validate_task_priority, validate_task_status,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
-    auth as auth_service, jobs as jobs_service, memberships as membership_service,
-    projects as project_service, tasks as task_service,
+    account as account_service, audit as audit_service, auth as auth_service,
+    jobs as jobs_service, memberships as membership_service, projects as project_service,
+    tasks as task_service,
 };
+use crate::storage::ArtifactStore;
 use crate::state::AppState;
 
 use super::AuthenticatedUser;
 use super::dto::{
-    AuthResponse, ExportRequest, HealthResponse, InvitationAcceptPayload, InvitationCreatePayload,
-    InvitationCreateResponse, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
-    ProjectPatchPayload, ProjectPayload, RefreshRequest, RegisterRequest, SwitchTenantRequest,
-    TaskAuditListResponse, TaskAuditQuery, TaskListQuery, TaskListResponse, TaskPatchPayload,
-    TaskPayload,
+    AuditListQuery, AuthResponse, ChangeEmailPayload, ChangePasswordPayload, ExportRequest,
+    HealthResponse, InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse,
+    LoginRequest, LogoutRequest, MeResponse, MemberRolePayload, PasswordResetConfirmPayload,
+    PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload, RefreshRequest,
+    RegisterRequest, ResendVerificationPayload, SwitchTenantRequest, TaskAuditListResponse,
+    TaskAuditQuery, TaskListQuery, TaskListResponse, TaskPatchPayload, TaskPayload,
+    VerifyEmailPayload,
 };
 use super::helpers::{
     bearer_token, ensure_active_tenant, ensure_admin_role, ensure_task_write_role, normalize_email,
@@ -115,6 +119,94 @@ pub(super) async fn logout(
     let access_token = payload.access_token.as_deref().or(header_access_token);
     auth_service::logout(&state, &payload.refresh_token, access_token).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn verify_email(
+    State(state): State<AppState>,
+    Json(payload): Json<VerifyEmailPayload>,
+) -> AppResult<StatusCode> {
+    let token = payload.token.trim();
+    if token.is_empty() {
+        return Err(AppError::Validation("token must not be empty".into()));
+    }
+    account_service::verify_email(&state, token).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn resend_verification(
+    State(state): State<AppState>,
+    Json(payload): Json<ResendVerificationPayload>,
+) -> AppResult<StatusCode> {
+    let email = normalize_email(&payload.email)?;
+    account_service::resend_verification(&state, &email).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+pub(super) async fn request_password_reset(
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordResetRequestPayload>,
+) -> AppResult<StatusCode> {
+    let email = normalize_email(&payload.email)?;
+    account_service::request_password_reset(&state, &email).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+pub(super) async fn confirm_password_reset(
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordResetConfirmPayload>,
+) -> AppResult<StatusCode> {
+    let token = payload.token.trim();
+    if token.is_empty() {
+        return Err(AppError::Validation("token must not be empty".into()));
+    }
+    validate_password(&payload.new_password)?;
+    account_service::confirm_password_reset(&state, token, &payload.new_password).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn change_password(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<ChangePasswordPayload>,
+) -> AppResult<StatusCode> {
+    validate_password(&payload.new_password)?;
+    account_service::change_password(
+        &state,
+        user.user_id,
+        &payload.current_password,
+        &payload.new_password,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn change_email(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<ChangeEmailPayload>,
+) -> AppResult<Json<UserResponse>> {
+    let email = normalize_email(&payload.new_email)?;
+    let updated =
+        account_service::change_email(&state, user.user_id, &payload.current_password, &email)
+            .await?;
+    Ok(Json(UserResponse::from(&updated)))
+}
+
+pub(super) async fn list_audit_events(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Query(query): Query<AuditListQuery>,
+) -> AppResult<Json<PaginatedAuditEvents>> {
+    ensure_admin_role(user.role)?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(AuditCursor::decode)
+        .transpose()?;
+
+    let page = audit_service::list_events(&state, user.tenant_id, cursor.as_ref(), limit).await?;
+    Ok(Json(page))
 }
 
 pub(super) async fn switch_tenant(
@@ -227,7 +319,7 @@ pub(super) async fn revoke_invitation(
 ) -> AppResult<StatusCode> {
     ensure_active_tenant(user.tenant_id, tenant_id)?;
     ensure_admin_role(user.role)?;
-    membership_service::revoke_invitation(&state, tenant_id, invitation_id).await?;
+    membership_service::revoke_invitation(&state, tenant_id, user.user_id, invitation_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -257,9 +349,15 @@ pub(super) async fn update_member_role(
     ensure_admin_role(user.role)?;
     let role = validate_role(payload.role.trim().to_ascii_lowercase().as_str())?;
 
-    let member =
-        membership_service::update_member_role(&state, tenant_id, user.role, member_id, role)
-            .await?;
+    let member = membership_service::update_member_role(
+        &state,
+        tenant_id,
+        user.role,
+        user.user_id,
+        member_id,
+        role,
+    )
+    .await?;
     Ok(Json(TenantMemberResponse::try_from(&member)?))
 }
 
@@ -270,7 +368,7 @@ pub(super) async fn remove_member(
 ) -> AppResult<StatusCode> {
     ensure_active_tenant(user.tenant_id, tenant_id)?;
     ensure_admin_role(user.role)?;
-    membership_service::remove_member(&state, tenant_id, user.role, member_id).await?;
+    membership_service::remove_member(&state, tenant_id, user.role, user.user_id, member_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -371,7 +469,7 @@ pub(super) async fn delete_project(
     Path(project_id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
     ensure_admin_role(user.role)?;
-    project_service::delete_project(&state, user.tenant_id, project_id).await?;
+    project_service::delete_project(&state, user.tenant_id, user.user_id, project_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -570,9 +668,16 @@ pub(super) async fn create_export(
         };
     }
 
+    let format = payload.export_format()?;
     let filters = payload.into_filters()?;
-    let job = match jobs_service::create_export_job(&state, user.tenant_id, user.user_id, &filters)
-        .await
+    let job = match jobs_service::create_export_job(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        &filters,
+        format,
+    )
+    .await
     {
         Ok(job) => job,
         Err(error) => {
@@ -611,4 +716,43 @@ pub(super) async fn get_job_result(
 ) -> AppResult<Json<JobResultResponse>> {
     let result = jobs_service::get_tenant_job_result(&state, job_id, user.tenant_id).await?;
     Ok(Json(result))
+}
+
+pub(super) async fn download_job_artifact(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(job_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let result = jobs_service::get_tenant_job_result(&state, job_id, user.tenant_id).await?;
+    let artifact = result
+        .result
+        .get("artifact")
+        .ok_or_else(|| AppError::NotFound("job has no artifact".into()))?;
+    let key = artifact
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::NotFound("job has no artifact".into()))?;
+    let content_type = artifact
+        .get("content_type")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+
+    let bytes = state
+        .storage
+        .get(key)
+        .await?
+        .ok_or_else(|| AppError::NotFound("artifact is no longer available".into()))?;
+
+    let filename = key.rsplit('/').next().unwrap_or("export").to_owned();
+    Ok((
+        [
+            (CONTENT_TYPE, content_type),
+            (
+                CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        bytes,
+    ))
 }

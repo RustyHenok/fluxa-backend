@@ -74,6 +74,26 @@ pub struct Cli {
     pub startup_retry_delay_ms: u64,
     #[arg(long, env = "CORS_ALLOW_ORIGIN", default_value = "*")]
     pub cors_allow_origin: String,
+    #[arg(long, env = "MAILER_PROVIDER", default_value = "noop")]
+    pub mailer_provider: String,
+    #[arg(long, env = "SMTP_URL")]
+    pub smtp_url: Option<String>,
+    #[arg(long, env = "MAIL_FROM")]
+    pub mail_from: Option<String>,
+    #[arg(long, env = "NOTIFY_DISPATCH_INTERVAL_MS", default_value_t = 5_000)]
+    pub notify_dispatch_interval_ms: u64,
+    #[arg(long, env = "REQUIRE_EMAIL_VERIFICATION", default_value_t = false, action = clap::ArgAction::Set)]
+    pub require_email_verification: bool,
+    #[arg(long, env = "EMAIL_VERIFICATION_TTL_HOURS", default_value_t = 24)]
+    pub email_verification_ttl_hours: i64,
+    #[arg(long, env = "PASSWORD_RESET_TTL_MINUTES", default_value_t = 60)]
+    pub password_reset_ttl_minutes: i64,
+    #[arg(long, env = "REMINDER_DUE_SOON_HOURS", default_value_t = 24)]
+    pub reminder_due_soon_hours: i64,
+    #[arg(long, env = "REMINDER_DEDUPE_TTL_HOURS", default_value_t = 24)]
+    pub reminder_dedupe_ttl_hours: i64,
+    #[arg(long, env = "ARTIFACT_STORAGE_DIR", default_value = "data/exports")]
+    pub artifact_storage_dir: String,
 }
 
 impl Cli {
@@ -130,6 +150,59 @@ impl Cli {
             ));
         }
 
+        match self.mailer_provider.as_str() {
+            "noop" | "log" => {}
+            "smtp" => {
+                if self
+                    .smtp_url
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err(AppError::Validation(
+                        "SMTP_URL is required when MAILER_PROVIDER is smtp".into(),
+                    ));
+                }
+                if self
+                    .mail_from
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err(AppError::Validation(
+                        "MAIL_FROM is required when MAILER_PROVIDER is smtp".into(),
+                    ));
+                }
+            }
+            other => {
+                return Err(AppError::Validation(format!(
+                    "MAILER_PROVIDER must be one of noop, log, smtp (got {other})"
+                )));
+            }
+        }
+
+        if self.notify_dispatch_interval_ms == 0 {
+            return Err(AppError::Validation(
+                "NOTIFY_DISPATCH_INTERVAL_MS must be positive".into(),
+            ));
+        }
+
+        if self.email_verification_ttl_hours <= 0 || self.password_reset_ttl_minutes <= 0 {
+            return Err(AppError::Validation(
+                "account token lifetimes must be positive".into(),
+            ));
+        }
+
+        if self.reminder_due_soon_hours <= 0 || self.reminder_dedupe_ttl_hours <= 0 {
+            return Err(AppError::Validation(
+                "reminder windows must be positive".into(),
+            ));
+        }
+
+        if self.artifact_storage_dir.trim().is_empty() {
+            return Err(AppError::Validation(
+                "ARTIFACT_STORAGE_DIR must not be empty".into(),
+            ));
+        }
+
         Ok(self)
     }
 
@@ -167,6 +240,22 @@ impl Cli {
 
     pub fn startup_retry_delay(&self) -> Duration {
         Duration::from_millis(self.startup_retry_delay_ms)
+    }
+
+    pub fn notify_dispatch_interval(&self) -> Duration {
+        Duration::from_millis(self.notify_dispatch_interval_ms)
+    }
+
+    pub fn email_verification_ttl(&self) -> Duration {
+        Duration::from_secs((self.email_verification_ttl_hours * 60 * 60) as u64)
+    }
+
+    pub fn password_reset_ttl(&self) -> Duration {
+        Duration::from_secs((self.password_reset_ttl_minutes * 60) as u64)
+    }
+
+    pub fn reminder_due_soon_window(&self) -> Duration {
+        Duration::from_secs((self.reminder_due_soon_hours * 60 * 60) as u64)
     }
 }
 

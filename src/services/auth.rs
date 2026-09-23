@@ -1,8 +1,10 @@
 use chrono::{Duration as ChronoDuration, Utc};
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::domain::{MembershipRecord, TenantMemberRecord, UserRecord};
 use crate::error::{AppError, AppResult};
+use crate::services::{account, audit};
 use crate::state::AppState;
 
 #[derive(Debug, Clone)]
@@ -36,6 +38,18 @@ pub async fn register(
         .create_user_with_tenant(email, &password_hash, &tenant_name)
         .await?;
 
+    account::send_verification_email(state, &user).await;
+    audit::record_event(
+        state,
+        Some(membership.tenant_id),
+        Some(user.id),
+        "user",
+        Some(user.id),
+        "user.registered",
+        json!({}),
+    )
+    .await;
+
     issue_session(state, user, membership, Uuid::new_v4()).await
 }
 
@@ -45,15 +59,57 @@ pub async fn login(
     password: &str,
     tenant_id: Option<Uuid>,
 ) -> AppResult<AuthSession> {
-    let user = state
-        .db
-        .get_user_by_email(email)
-        .await?
-        .ok_or_else(|| AppError::Unauthorized("invalid credentials".into()))?;
-    state.auth.verify_password(password, &user.password_hash)?;
+    let Some(user) = state.db.get_user_by_email(email).await? else {
+        audit::record_event(
+            state,
+            None,
+            None,
+            "user",
+            None,
+            "auth.login_failed",
+            json!({ "reason": "unknown_email" }),
+        )
+        .await;
+        return Err(AppError::Unauthorized("invalid credentials".into()));
+    };
+
+    if let Err(error) = state.auth.verify_password(password, &user.password_hash) {
+        audit::record_event(
+            state,
+            None,
+            Some(user.id),
+            "user",
+            Some(user.id),
+            "auth.login_failed",
+            json!({ "reason": "invalid_password" }),
+        )
+        .await;
+        return Err(error);
+    }
+
+    ensure_email_verified(state, &user)?;
 
     let membership = resolve_membership(state, user.id, tenant_id).await?;
+    audit::record_event(
+        state,
+        Some(membership.tenant_id),
+        Some(user.id),
+        "user",
+        Some(user.id),
+        "auth.login_succeeded",
+        json!({}),
+    )
+    .await;
     issue_session(state, user, membership, Uuid::new_v4()).await
+}
+
+/// Rejects users with unverified email addresses when
+/// `REQUIRE_EMAIL_VERIFICATION` is enabled.
+fn ensure_email_verified(state: &AppState, user: &UserRecord) -> AppResult<()> {
+    if state.config.require_email_verification && user.email_verified_at.is_none() {
+        return Err(AppError::Forbidden("email address is not verified".into()));
+    }
+    Ok(())
 }
 
 pub async fn refresh(
@@ -77,6 +133,7 @@ pub async fn refresh(
     }
 
     let user = state.db.get_user_by_id(user_id).await?;
+    ensure_email_verified(state, &user)?;
     let membership =
         resolve_membership(state, user.id, tenant_id.or(Some(recorded.tenant_id))).await?;
     let next_refresh_id = Uuid::new_v4();
@@ -96,6 +153,17 @@ pub async fn refresh(
         .auth
         .issue_token_pair(&user, &membership, next_refresh_id)?;
 
+    audit::record_event(
+        state,
+        Some(membership.tenant_id),
+        Some(user.id),
+        "user",
+        Some(user.id),
+        "auth.token_refreshed",
+        json!({}),
+    )
+    .await;
+
     Ok(AuthSession {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
@@ -112,7 +180,19 @@ pub async fn logout(
 ) -> AppResult<()> {
     let claims = state.auth.decode_refresh_token(refresh_token)?;
     let refresh_token_id = parse_uuid(&claims.jti, "refresh token id")?;
+    let user_id = parse_uuid(&claims.sub, "user id").ok();
     state.db.revoke_refresh_token(refresh_token_id).await?;
+
+    audit::record_event(
+        state,
+        None,
+        user_id,
+        "user",
+        user_id,
+        "auth.logged_out",
+        json!({}),
+    )
+    .await;
 
     if let Some(access_token) = access_token {
         deny_access_token(state, access_token).await?;

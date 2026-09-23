@@ -236,6 +236,16 @@ pub struct PaginatedTaskAudit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct DueReminderCandidate {
+    pub task_id: Uuid,
+    pub tenant_id: Uuid,
+    pub title: String,
+    pub due_at: Option<DateTime<Utc>>,
+    pub assignee_id: Uuid,
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct DashboardSummary {
     pub open_task_count: i64,
     pub in_progress_task_count: i64,

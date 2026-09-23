@@ -53,6 +53,19 @@ fn router(state: AppState) -> AppResult<Router> {
         .route("/auth/login", post(handlers::login))
         .route("/auth/refresh", post(handlers::refresh))
         .route("/auth/logout", post(handlers::logout))
+        .route("/auth/verify-email", post(handlers::verify_email))
+        .route(
+            "/auth/resend-verification",
+            post(handlers::resend_verification),
+        )
+        .route(
+            "/auth/password-reset/request",
+            post(handlers::request_password_reset),
+        )
+        .route(
+            "/auth/password-reset/confirm",
+            post(handlers::confirm_password_reset),
+        )
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::auth_rate_limit_middleware,
@@ -63,6 +76,9 @@ fn router(state: AppState) -> AppResult<Router> {
         .route("/dashboard/summary", get(handlers::dashboard_summary))
         .route("/me", get(handlers::me))
         .route("/me/tenants", get(handlers::list_my_tenants))
+        .route("/me/change-password", post(handlers::change_password))
+        .route("/me/change-email", post(handlers::change_email))
+        .route("/audit", get(handlers::list_audit_events))
         .route(
             "/tenants/:tenant_id/members",
             get(handlers::list_tenant_members),
@@ -115,6 +131,10 @@ fn router(state: AppState) -> AppResult<Router> {
         .route("/exports/tasks", post(handlers::create_export))
         .route("/jobs/:job_id", get(handlers::get_job))
         .route("/jobs/:job_id/result", get(handlers::get_job_result))
+        .route(
+            "/jobs/:job_id/artifact",
+            get(handlers::download_job_artifact),
+        )
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::protected_middleware,
