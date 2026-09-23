@@ -4,9 +4,9 @@ pub mod projects;
 pub mod tasks;
 
 pub use auth::{
-    MembershipRecord, MembershipRole, ROLE_ADMIN, ROLE_MEMBER, ROLE_OWNER, RefreshTokenRecord,
-    TenantMemberRecord, TenantMemberResponse, TenantMembershipResponse, TenantRecord, UserRecord,
-    UserResponse, validate_role,
+    InvitationRecord, InvitationResponse, MembershipRecord, MembershipRole, ROLE_ADMIN,
+    ROLE_MEMBER, ROLE_OWNER, RefreshTokenRecord, TenantMemberRecord, TenantMemberResponse,
+    TenantMembershipResponse, TenantRecord, UserRecord, UserResponse, validate_role,
 };
 pub use jobs::{
     BackgroundJobRecord, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER, JOB_STATUS_QUEUED,

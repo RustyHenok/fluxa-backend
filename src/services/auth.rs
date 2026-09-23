@@ -105,10 +105,42 @@ pub async fn refresh(
     })
 }
 
-pub async fn logout(state: &AppState, refresh_token: &str) -> AppResult<()> {
+pub async fn logout(
+    state: &AppState,
+    refresh_token: &str,
+    access_token: Option<&str>,
+) -> AppResult<()> {
     let claims = state.auth.decode_refresh_token(refresh_token)?;
     let refresh_token_id = parse_uuid(&claims.jti, "refresh token id")?;
-    state.db.revoke_refresh_token(refresh_token_id).await
+    state.db.revoke_refresh_token(refresh_token_id).await?;
+
+    if let Some(access_token) = access_token {
+        deny_access_token(state, access_token).await?;
+    }
+
+    Ok(())
+}
+
+/// Adds a still-valid access token to the Redis denylist for the remainder of
+/// its lifetime. Invalid or already-expired tokens are ignored so logout stays
+/// idempotent.
+async fn deny_access_token(state: &AppState, access_token: &str) -> AppResult<()> {
+    let Ok(claims) = state.auth.decode_access_token(access_token) else {
+        return Ok(());
+    };
+
+    let remaining_seconds = claims.exp - Utc::now().timestamp();
+    if remaining_seconds <= 0 {
+        return Ok(());
+    }
+
+    state
+        .cache
+        .deny_access_token(
+            &claims.jti,
+            std::time::Duration::from_secs(remaining_seconds as u64),
+        )
+        .await
 }
 
 pub async fn switch_tenant(

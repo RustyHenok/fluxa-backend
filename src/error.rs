@@ -70,10 +70,10 @@ impl IntoResponse for AppError {
 
 impl From<sqlx::Error> for AppError {
     fn from(error: sqlx::Error) -> Self {
-        if let sqlx::Error::Database(db_error) = &error {
-            if db_error.code().as_deref() == Some("23505") {
-                return Self::Conflict("resource already exists".into());
-            }
+        if let sqlx::Error::Database(db_error) = &error
+            && db_error.code().as_deref() == Some("23505")
+        {
+            return Self::Conflict("resource already exists".into());
         }
 
         Self::Internal(format!("database error: {error}"))

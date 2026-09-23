@@ -34,6 +34,8 @@ pub struct Cli {
     pub redis_url: String,
     #[arg(long, env = "JWT_SECRET")]
     pub jwt_secret: String,
+    #[arg(long, env = "GRPC_AUTH_TOKEN")]
+    pub grpc_auth_token: String,
     #[arg(long, env = "ACCESS_TOKEN_MINUTES", default_value_t = 15)]
     pub access_token_minutes: i64,
     #[arg(long, env = "REFRESH_TOKEN_DAYS", default_value_t = 30)]
@@ -60,6 +62,10 @@ pub struct Cli {
     pub job_queue_block_timeout_seconds: usize,
     #[arg(long, env = "MAX_JOB_ATTEMPTS", default_value_t = 5)]
     pub max_job_attempts: i32,
+    #[arg(long, env = "JOB_LEASE_SECONDS", default_value_t = 300)]
+    pub job_lease_seconds: u64,
+    #[arg(long, env = "INVITATION_TTL_HOURS", default_value_t = 72)]
+    pub invitation_ttl_hours: i64,
     #[arg(long, env = "DATABASE_MAX_CONNECTIONS", default_value_t = 10)]
     pub database_max_connections: u32,
     #[arg(long, env = "STARTUP_MAX_RETRIES", default_value_t = 20)]
@@ -75,6 +81,12 @@ impl Cli {
         if self.jwt_secret.len() < 32 {
             return Err(AppError::Validation(
                 "JWT_SECRET must be at least 32 characters long".into(),
+            ));
+        }
+
+        if self.grpc_auth_token.trim().len() < 32 {
+            return Err(AppError::Validation(
+                "GRPC_AUTH_TOKEN must be at least 32 characters long".into(),
             ));
         }
 
@@ -97,6 +109,18 @@ impl Cli {
         if self.max_job_attempts <= 0 {
             return Err(AppError::Validation(
                 "MAX_JOB_ATTEMPTS must be positive".into(),
+            ));
+        }
+
+        if self.job_lease_seconds == 0 {
+            return Err(AppError::Validation(
+                "JOB_LEASE_SECONDS must be positive".into(),
+            ));
+        }
+
+        if self.invitation_ttl_hours <= 0 {
+            return Err(AppError::Validation(
+                "INVITATION_TTL_HOURS must be positive".into(),
             ));
         }
 
@@ -127,6 +151,14 @@ impl Cli {
 
     pub fn worker_dispatch_interval(&self) -> Duration {
         Duration::from_millis(self.worker_dispatch_interval_ms)
+    }
+
+    pub fn job_lease(&self) -> Duration {
+        Duration::from_secs(self.job_lease_seconds)
+    }
+
+    pub fn invitation_ttl(&self) -> Duration {
+        Duration::from_secs((self.invitation_ttl_hours * 60 * 60) as u64)
     }
 
     pub fn worker_scheduler_interval(&self) -> Duration {

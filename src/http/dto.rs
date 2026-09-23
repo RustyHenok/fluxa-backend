@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::{
-    TaskAuditResponse, TaskFilters, TaskResponse, TenantMembershipResponse, UserResponse,
-    validate_task_priority, validate_task_status,
+    InvitationResponse, TaskAuditResponse, TaskFilters, TaskResponse, TenantMembershipResponse,
+    UserResponse, validate_task_priority, validate_task_status,
 };
 use crate::error::AppResult;
 
@@ -33,6 +33,29 @@ pub(super) struct RefreshRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct LogoutRequest {
     pub(super) refresh_token: String,
+    pub(super) access_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct InvitationCreatePayload {
+    pub(super) email: String,
+    pub(super) role: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct InvitationAcceptPayload {
+    pub(super) token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct MemberRolePayload {
+    pub(super) role: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct InvitationCreateResponse {
+    pub(super) invitation: InvitationResponse,
+    pub(super) token: String,
 }
 
 #[derive(Debug, Deserialize)]

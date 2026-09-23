@@ -75,6 +75,37 @@ impl Database {
         .map_err(AppError::from)
     }
 
+    /// Requeues `running` jobs whose lease has expired. Jobs that already
+    /// exhausted their attempts move to `dead_letter` instead, mirroring the
+    /// semantics of `fail_job`. Returns the affected job ids and new statuses.
+    pub async fn requeue_stale_jobs(
+        &self,
+        lease: std::time::Duration,
+    ) -> AppResult<Vec<(Uuid, String)>> {
+        let lease = ChronoDuration::from_std(lease)
+            .map_err(|error| AppError::internal(format!("invalid job lease: {error}")))?;
+        let cutoff = Utc::now() - lease;
+
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(
+            r#"
+            UPDATE background_jobs
+            SET status = CASE WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'queued' END,
+                scheduled_at = now(),
+                finished_at = CASE WHEN attempts >= max_attempts THEN now() ELSE finished_at END,
+                last_error = 'job lease expired before completion'
+            WHERE status = 'running'
+              AND started_at IS NOT NULL
+              AND started_at <= $1
+            RETURNING id, status
+            "#,
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
     pub async fn mark_job_running(&self, job_id: Uuid) -> AppResult<Option<BackgroundJobRecord>> {
         sqlx::query_as::<_, BackgroundJobRecord>(
             r#"

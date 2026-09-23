@@ -91,4 +91,84 @@ impl Database {
         .await
         .map_err(AppError::from)
     }
+
+    pub async fn get_tenant_member(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+    ) -> AppResult<Option<TenantMemberRecord>> {
+        sqlx::query_as::<_, TenantMemberRecord>(
+            r#"
+            SELECT tm.user_id,
+                   u.email,
+                   tm.role,
+                   tm.created_at AS joined_at
+            FROM tenant_memberships tm
+            JOIN users u ON u.id = tm.user_id
+            WHERE tm.tenant_id = $1 AND tm.user_id = $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::from)
+    }
+
+    pub async fn update_membership_role(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        role: &str,
+    ) -> AppResult<Option<TenantMemberRecord>> {
+        sqlx::query_as::<_, TenantMemberRecord>(
+            r#"
+            UPDATE tenant_memberships tm
+            SET role = $3
+            FROM users u
+            WHERE tm.tenant_id = $1
+              AND tm.user_id = $2
+              AND u.id = tm.user_id
+            RETURNING tm.user_id,
+                      u.email,
+                      tm.role,
+                      tm.created_at AS joined_at
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(user_id)
+        .bind(role)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::from)
+    }
+
+    pub async fn delete_membership(&self, tenant_id: Uuid, user_id: Uuid) -> AppResult<bool> {
+        let deleted = sqlx::query(
+            r#"
+            DELETE FROM tenant_memberships
+            WHERE tenant_id = $1 AND user_id = $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(deleted.rows_affected() > 0)
+    }
+
+    pub async fn count_tenant_owners(&self, tenant_id: Uuid) -> AppResult<i64> {
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM tenant_memberships
+            WHERE tenant_id = $1 AND role = 'owner'
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(AppError::from)
+    }
 }

@@ -48,6 +48,11 @@ pub(super) async fn protected_middleware(
 ) -> AppResult<Response> {
     let token = bearer_token(request.headers())?;
     let claims = state.auth.decode_access_token(token)?;
+    if state.cache.is_access_token_denied(&claims.jti).await? {
+        return Err(crate::error::AppError::Unauthorized(
+            "access token has been revoked".into(),
+        ));
+    }
     let user_id = parse_uuid(&claims.sub, "user id")?;
     let tenant_id = parse_uuid(&claims.tenant_id, "tenant id")?;
     let membership = state

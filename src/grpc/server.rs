@@ -6,6 +6,7 @@ use tracing::info;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
+use super::auth::SharedTokenInterceptor;
 use super::proto::job_admin_server::JobAdminServer;
 use super::proto::task_read_server::TaskReadServer;
 use super::services::{JobAdminService, TaskReadService};
@@ -15,9 +16,17 @@ pub async fn serve(state: AppState, mut shutdown: watch::Receiver<bool>) -> AppR
     let incoming = TcpListenerStream::new(listener);
     info!("grpc server listening on {}", state.config.grpc_addr);
 
+    let interceptor = SharedTokenInterceptor::new(state.config.grpc_auth_token.clone());
+
     Server::builder()
-        .add_service(JobAdminServer::new(JobAdminService::new(state.clone())))
-        .add_service(TaskReadServer::new(TaskReadService::new(state)))
+        .add_service(JobAdminServer::with_interceptor(
+            JobAdminService::new(state.clone()),
+            interceptor.clone(),
+        ))
+        .add_service(TaskReadServer::with_interceptor(
+            TaskReadService::new(state),
+            interceptor,
+        ))
         .serve_with_incoming_shutdown(incoming, async move {
             let _ = shutdown.changed().await;
         })

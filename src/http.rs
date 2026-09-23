@@ -4,7 +4,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::middleware as axum_middleware;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, patch, post};
 use tower_http::compression::CompressionLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::timeout::TimeoutLayer;
@@ -66,6 +66,22 @@ fn router(state: AppState) -> AppResult<Router> {
         .route(
             "/tenants/:tenant_id/members",
             get(handlers::list_tenant_members),
+        )
+        .route(
+            "/tenants/:tenant_id/members/:member_id",
+            patch(handlers::update_member_role).delete(handlers::remove_member),
+        )
+        .route(
+            "/tenants/:tenant_id/invitations",
+            get(handlers::list_invitations).post(handlers::create_invitation),
+        )
+        .route(
+            "/tenants/:tenant_id/invitations/accept",
+            post(handlers::accept_invitation),
+        )
+        .route(
+            "/tenants/:tenant_id/invitations/:invitation_id",
+            delete(handlers::revoke_invitation),
         )
         .route(
             "/projects",

@@ -2,6 +2,7 @@ use chrono::Utc;
 use metrics::counter;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::domain::{
@@ -106,6 +107,22 @@ pub async fn dispatch_ready_jobs(state: &AppState, limit: i64) -> AppResult<()> 
     let job_ids = state.db.list_ready_job_ids(limit).await?;
     for job_id in job_ids {
         state.cache.enqueue_job(job_id).await?;
+    }
+
+    Ok(())
+}
+
+/// Recovers jobs stuck in `running` after their lease expired, either
+/// requeueing them or moving them to `dead_letter` once attempts are spent.
+pub async fn reap_stale_jobs(state: &AppState) -> AppResult<()> {
+    let reclaimed = state
+        .db
+        .requeue_stale_jobs(state.config.job_lease())
+        .await?;
+
+    for (job_id, status) in reclaimed {
+        warn!("reclaimed stale job {job_id} -> {status}");
+        counter!("jobs_reclaimed_total", "status" => status).increment(1);
     }
 
     Ok(())

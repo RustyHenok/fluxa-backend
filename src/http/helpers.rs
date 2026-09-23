@@ -69,6 +69,16 @@ pub(super) fn ensure_admin_role(role: MembershipRole) -> AppResult<()> {
     }
 }
 
+pub(super) fn ensure_active_tenant(
+    active_tenant_id: Uuid,
+    requested_tenant_id: Uuid,
+) -> AppResult<()> {
+    if active_tenant_id != requested_tenant_id {
+        return Err(AppError::NotFound("tenant not found".into()));
+    }
+    Ok(())
+}
+
 pub(super) fn required_idempotency_key(headers: &HeaderMap) -> AppResult<&str> {
     headers
         .get("Idempotency-Key")
@@ -107,10 +117,9 @@ pub(super) fn client_identifier(request: &Request) -> String {
         .headers()
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
+        && let Some(first) = value.split(',').next()
     {
-        if let Some(first) = value.split(',').next() {
-            return first.trim().to_string();
-        }
+        return first.trim().to_string();
     }
 
     request

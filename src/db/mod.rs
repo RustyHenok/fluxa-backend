@@ -1,3 +1,4 @@
+mod invitations;
 mod jobs;
 mod memberships;
 mod projects;

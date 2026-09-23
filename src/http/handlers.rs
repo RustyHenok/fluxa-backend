@@ -9,28 +9,30 @@ use uuid::Uuid;
 
 use crate::cache::StoredResponse;
 use crate::domain::{
-    CreateProjectInput, CreateTaskInput, DashboardSummary, JobResponse, JobResultResponse,
-    ProjectResponse, ProjectSummary, TaskAuditResponse, TaskResponse, TenantMemberResponse,
-    TenantMembershipResponse, UpdateProjectInput, UpdateTaskInput, UserResponse,
-    validate_task_priority, validate_task_status,
+    CreateProjectInput, CreateTaskInput, DashboardSummary, InvitationResponse, JobResponse,
+    JobResultResponse, ProjectResponse, ProjectSummary, TaskAuditResponse, TaskResponse,
+    TenantMemberResponse, TenantMembershipResponse, UpdateProjectInput, UpdateTaskInput,
+    UserResponse, validate_role, validate_task_priority, validate_task_status,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
-    auth as auth_service, jobs as jobs_service, projects as project_service, tasks as task_service,
+    auth as auth_service, jobs as jobs_service, memberships as membership_service,
+    projects as project_service, tasks as task_service,
 };
 use crate::state::AppState;
 
 use super::AuthenticatedUser;
 use super::dto::{
-    AuthResponse, ExportRequest, HealthResponse, LoginRequest, LogoutRequest, MeResponse,
+    AuthResponse, ExportRequest, HealthResponse, InvitationAcceptPayload, InvitationCreatePayload,
+    InvitationCreateResponse, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
     ProjectPatchPayload, ProjectPayload, RefreshRequest, RegisterRequest, SwitchTenantRequest,
     TaskAuditListResponse, TaskAuditQuery, TaskListQuery, TaskListResponse, TaskPatchPayload,
     TaskPayload,
 };
 use super::helpers::{
-    ensure_admin_role, ensure_task_write_role, normalize_email, normalize_optional_choice,
-    replay_idempotent, required_idempotency_key, validate_password,
+    bearer_token, ensure_active_tenant, ensure_admin_role, ensure_task_write_role, normalize_email,
+    normalize_optional_choice, replay_idempotent, required_idempotency_key, validate_password,
 };
 
 pub(super) async fn healthz() -> Json<HealthResponse<'static>> {
@@ -106,9 +108,12 @@ pub(super) async fn refresh(
 
 pub(super) async fn logout(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<LogoutRequest>,
 ) -> AppResult<StatusCode> {
-    auth_service::logout(&state, &payload.refresh_token).await?;
+    let header_access_token = bearer_token(&headers).ok();
+    let access_token = payload.access_token.as_deref().or(header_access_token);
+    auth_service::logout(&state, &payload.refresh_token, access_token).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -166,6 +171,107 @@ pub(super) async fn list_tenant_members(
             .map(TenantMemberResponse::try_from)
             .collect::<AppResult<Vec<_>>>()?,
     ))
+}
+
+pub(super) async fn create_invitation(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(tenant_id): Path<Uuid>,
+    Json(payload): Json<InvitationCreatePayload>,
+) -> AppResult<(StatusCode, Json<InvitationCreateResponse>)> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    let email = normalize_email(&payload.email)?;
+    let role = validate_role(payload.role.trim().to_ascii_lowercase().as_str())?;
+
+    let created = membership_service::create_invitation(
+        &state,
+        tenant_id,
+        user.role,
+        user.user_id,
+        &email,
+        role,
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(InvitationCreateResponse {
+            invitation: InvitationResponse::try_from(&created.invitation)?,
+            token: created.token,
+        }),
+    ))
+}
+
+pub(super) async fn list_invitations(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(tenant_id): Path<Uuid>,
+) -> AppResult<Json<Vec<InvitationResponse>>> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    let invitations = membership_service::list_invitations(&state, tenant_id).await?;
+
+    Ok(Json(
+        invitations
+            .iter()
+            .map(InvitationResponse::try_from)
+            .collect::<AppResult<Vec<_>>>()?,
+    ))
+}
+
+pub(super) async fn revoke_invitation(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((tenant_id, invitation_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    membership_service::revoke_invitation(&state, tenant_id, invitation_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn accept_invitation(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(tenant_id): Path<Uuid>,
+    Json(payload): Json<InvitationAcceptPayload>,
+) -> AppResult<Json<TenantMembershipResponse>> {
+    let token = payload.token.trim();
+    if token.is_empty() {
+        return Err(AppError::Validation("token must not be empty".into()));
+    }
+
+    let membership =
+        membership_service::accept_invitation(&state, tenant_id, user.user_id, token).await?;
+    Ok(Json(TenantMembershipResponse::try_from(&membership)?))
+}
+
+pub(super) async fn update_member_role(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((tenant_id, member_id)): Path<(Uuid, Uuid)>,
+    Json(payload): Json<MemberRolePayload>,
+) -> AppResult<Json<TenantMemberResponse>> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    let role = validate_role(payload.role.trim().to_ascii_lowercase().as_str())?;
+
+    let member =
+        membership_service::update_member_role(&state, tenant_id, user.role, member_id, role)
+            .await?;
+    Ok(Json(TenantMemberResponse::try_from(&member)?))
+}
+
+pub(super) async fn remove_member(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((tenant_id, member_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    membership_service::remove_member(&state, tenant_id, user.role, member_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(super) async fn list_projects(

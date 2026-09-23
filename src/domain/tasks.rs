@@ -203,10 +203,10 @@ pub struct UpdateTaskInput {
 
 impl UpdateTaskInput {
     pub fn validate(self) -> AppResult<Self> {
-        if let Some(title) = &self.title {
-            if title.trim().is_empty() {
-                return Err(AppError::Validation("title cannot be empty".into()));
-            }
+        if let Some(title) = &self.title
+            && title.trim().is_empty()
+        {
+            return Err(AppError::Validation("title cannot be empty".into()));
         }
         Ok(self)
     }

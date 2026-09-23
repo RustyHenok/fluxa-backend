@@ -101,6 +101,45 @@ pub struct RefreshTokenRecord {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct InvitationRecord {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub email: String,
+    pub role: String,
+    pub token_hash: String,
+    pub expires_at: DateTime<Utc>,
+    pub accepted_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvitationResponse {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub email: String,
+    pub role: MembershipRole,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl TryFrom<&InvitationRecord> for InvitationResponse {
+    type Error = AppError;
+
+    fn try_from(value: &InvitationRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id,
+            tenant_id: value.tenant_id,
+            email: value.email.clone(),
+            role: validate_role(&value.role)?,
+            expires_at: value.expires_at,
+            created_at: value.created_at,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserResponse {
     pub id: Uuid,
