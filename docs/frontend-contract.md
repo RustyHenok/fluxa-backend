@@ -94,7 +94,7 @@ Both clients should use the REST API. The gRPC surface stays internal-only.
 
 ### Password policy
 
-- 10–128 characters; a small list of very common passwords is rejected with `422 validation_error`
+- 10–128 characters; a small list of very common passwords is rejected with `400 validation_error`
 
 ## Error Envelope
 

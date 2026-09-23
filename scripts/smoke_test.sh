@@ -204,8 +204,13 @@ JOB_RESULT_JSON="$(curl -sS "$BASE/v1/jobs/$JOB_ID/result" -H "Authorization: Be
 [[ "$(jq -r '.job_id' <<<"$JOB_RESULT_JSON")" == "$JOB_ID" ]] || fail "job result endpoint returned an unexpected job id"
 [[ "$(jq -r '.job_type' <<<"$JOB_RESULT_JSON")" == "task_export" ]] || fail "job result endpoint returned an unexpected job type"
 [[ "$(jq -r '.result.task_count' <<<"$JOB_RESULT_JSON")" == "1" ]] || fail "job result endpoint returned an unexpected task count"
-[[ "$(jq -r '.result.tasks[0].id' <<<"$JOB_RESULT_JSON")" == "$TASK_ID" ]] || fail "job result endpoint did not include the expected task"
-[[ "$(jq -r '.result.tasks[0].project_id' <<<"$JOB_RESULT_JSON")" == "$PROJECT_ID" ]] || fail "job result endpoint did not include the expected project linkage"
+[[ "$(jq -r '.result.format' <<<"$JOB_RESULT_JSON")" == "json" ]] || fail "job result endpoint returned an unexpected export format"
+ARTIFACT_PATH="$(jq -er '.result.artifact.download_path' <<<"$JOB_RESULT_JSON")" || fail "job result endpoint did not include an artifact download path"
+
+step "Download export artifact"
+ARTIFACT_JSON="$(curl -sS "$BASE$ARTIFACT_PATH" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.tasks[0].id' <<<"$ARTIFACT_JSON")" == "$TASK_ID" ]] || fail "export artifact did not include the expected task"
+[[ "$(jq -r '.tasks[0].project_id' <<<"$ARTIFACT_JSON")" == "$PROJECT_ID" ]] || fail "export artifact did not include the expected project linkage"
 
 step "Invite a second member and enforce role boundaries"
 MEMBER_EMAIL="smoke-member-$(date +%s)-$RANDOM@example.com"

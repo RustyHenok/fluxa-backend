@@ -418,7 +418,7 @@ impl Database {
             JOIN users u ON u.id = t.assignee_id
             WHERE t.due_at IS NOT NULL
               AND t.assignee_id IS NOT NULL
-              AND t.due_at <= now() + make_interval(hours => $1)
+              AND t.due_at <= now() + make_interval(hours => $1::int)
               AND t.status NOT IN ('done', 'archived')
               AND ($3::uuid IS NULL OR t.tenant_id = $3)
             ORDER BY t.due_at ASC

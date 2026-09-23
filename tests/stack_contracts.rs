@@ -2,6 +2,7 @@ use fluxa_backend::grpc::proto::job_admin_client::JobAdminClient;
 use fluxa_backend::grpc::proto::task_read_client::TaskReadClient;
 use fluxa_backend::grpc::proto::{
     EnqueueExportRequest, GetTaskSnapshotRequest, ListTaskSummariesRequest,
+    RunDueReminderSweepRequest,
 };
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -9,9 +10,9 @@ use serde_json::{Value, json};
 mod support;
 
 use support::{
-    TestServer, add_membership, authed_grpc_request, create_project, create_task,
-    insert_stale_running_job, poll_job_status, register_user, stack_test_guard,
-    wait_for_job_status, wait_for_rest_job_completion,
+    TestServer, add_membership, authed_grpc_request, count_notifications, create_project,
+    create_task, fetch_notification_token, insert_stale_running_job, poll_job_status,
+    register_user, stack_test_guard, wait_for_job_status, wait_for_rest_job_completion,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -320,7 +321,40 @@ async fn rest_api_enforces_tenant_isolation() {
     assert_eq!(switched_job_result["job_id"], export_job_id);
     assert_eq!(switched_job_result["job_type"], "task_export");
     assert_eq!(switched_job_result["result"]["task_count"], 1);
-    assert_eq!(switched_job_result["result"]["tasks"][0]["id"], task_id);
+    assert_eq!(switched_job_result["result"]["format"], "json");
+    let artifact = &switched_job_result["result"]["artifact"];
+    assert_eq!(artifact["content_type"], "application/json");
+    assert!(
+        artifact["size_bytes"].as_i64().unwrap_or_default() > 0,
+        "artifact should have a non-zero size"
+    );
+    let download_path = artifact["download_path"]
+        .as_str()
+        .expect("export result should include a download path");
+    assert_eq!(
+        download_path,
+        format!("/v1/jobs/{export_job_id}/artifact").as_str()
+    );
+
+    let artifact_response = client
+        .get(format!("{}{download_path}", server.http_base))
+        .bearer_auth(switched_access_token)
+        .send()
+        .await
+        .expect("artifact download should return a response");
+    assert_eq!(artifact_response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        artifact_response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    let artifact_body: Value = artifact_response
+        .json()
+        .await
+        .expect("artifact should be valid json");
+    assert_eq!(artifact_body["tasks"][0]["id"], task_id);
 
     let member_list = client
         .get(format!(
@@ -755,4 +789,451 @@ async fn logout_denylists_access_token() {
     assert_eq!(me_after.status(), reqwest::StatusCode::UNAUTHORIZED);
     let body: Value = me_after.json().await.expect("error should be json");
     assert_eq!(body["error"]["code"], "unauthorized");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn account_lifecycle_flows() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "account").await;
+
+    let weak_password = client
+        .post(format!("{}/v1/auth/register", server.http_base))
+        .json(&json!({
+            "email": format!("weak-{}@example.com", uuid::Uuid::new_v4()),
+            "password": "password123",
+            "tenant_name": "Weak Workspace",
+        }))
+        .send()
+        .await
+        .expect("weak password register should return a response");
+    assert_eq!(weak_password.status(), reqwest::StatusCode::BAD_REQUEST);
+    let weak_body: Value = weak_password
+        .json()
+        .await
+        .expect("weak password error should be json");
+    assert_eq!(weak_body["error"]["code"], "validation_error");
+
+    let me_before: Value = client
+        .get(format!("{}/v1/me", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("/v1/me should return a response")
+        .json()
+        .await
+        .expect("me response should be json");
+    assert_eq!(me_before["user"]["email_verified"], false);
+
+    let verify_token = fetch_notification_token(&owner.email, "email_verification").await;
+    let verified = client
+        .post(format!("{}/v1/auth/verify-email", server.http_base))
+        .json(&json!({ "token": verify_token }))
+        .send()
+        .await
+        .expect("verify email should return a response");
+    assert_eq!(verified.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let me_after: Value = client
+        .get(format!("{}/v1/me", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("/v1/me should return a response")
+        .json()
+        .await
+        .expect("me response should be json");
+    assert_eq!(me_after["user"]["email_verified"], true);
+
+    let reused_token = client
+        .post(format!("{}/v1/auth/verify-email", server.http_base))
+        .json(&json!({ "token": verify_token }))
+        .send()
+        .await
+        .expect("verify email reuse should return a response");
+    assert_eq!(reused_token.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let reset_request = client
+        .post(format!(
+            "{}/v1/auth/password-reset/request",
+            server.http_base
+        ))
+        .json(&json!({ "email": owner.email }))
+        .send()
+        .await
+        .expect("password reset request should return a response");
+    assert_eq!(reset_request.status(), reqwest::StatusCode::ACCEPTED);
+
+    let unknown_reset = client
+        .post(format!(
+            "{}/v1/auth/password-reset/request",
+            server.http_base
+        ))
+        .json(&json!({ "email": format!("nobody-{}@example.com", uuid::Uuid::new_v4()) }))
+        .send()
+        .await
+        .expect("unknown email reset request should return a response");
+    assert_eq!(unknown_reset.status(), reqwest::StatusCode::ACCEPTED);
+
+    let reset_token = fetch_notification_token(&owner.email, "password_reset").await;
+    let reset_confirm = client
+        .post(format!(
+            "{}/v1/auth/password-reset/confirm",
+            server.http_base
+        ))
+        .json(&json!({
+            "token": reset_token,
+            "new_password": "fresh-secret-pw-1",
+        }))
+        .send()
+        .await
+        .expect("password reset confirm should return a response");
+    assert_eq!(reset_confirm.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let stale_refresh = client
+        .post(format!("{}/v1/auth/refresh", server.http_base))
+        .json(&json!({ "refresh_token": owner.refresh_token }))
+        .send()
+        .await
+        .expect("stale refresh should return a response");
+    assert_eq!(stale_refresh.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let old_password_login = client
+        .post(format!("{}/v1/auth/login", server.http_base))
+        .json(&json!({
+            "email": owner.email,
+            "password": "supersecret123",
+        }))
+        .send()
+        .await
+        .expect("old password login should return a response");
+    assert_eq!(
+        old_password_login.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+
+    let login: Value = client
+        .post(format!("{}/v1/auth/login", server.http_base))
+        .json(&json!({
+            "email": owner.email,
+            "password": "fresh-secret-pw-1",
+        }))
+        .send()
+        .await
+        .expect("new password login should return a response")
+        .json()
+        .await
+        .expect("login response should be json");
+    let login_access = login["access_token"]
+        .as_str()
+        .expect("login should include access token")
+        .to_string();
+    let login_refresh = login["refresh_token"]
+        .as_str()
+        .expect("login should include refresh token")
+        .to_string();
+
+    let change_password = client
+        .post(format!("{}/v1/me/change-password", server.http_base))
+        .bearer_auth(&login_access)
+        .json(&json!({
+            "current_password": "fresh-secret-pw-1",
+            "new_password": "changed-secret-pw-2",
+        }))
+        .send()
+        .await
+        .expect("change password should return a response");
+    assert_eq!(change_password.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let revoked_refresh = client
+        .post(format!("{}/v1/auth/refresh", server.http_base))
+        .json(&json!({ "refresh_token": login_refresh }))
+        .send()
+        .await
+        .expect("revoked refresh should return a response");
+    assert_eq!(revoked_refresh.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let relogin: Value = client
+        .post(format!("{}/v1/auth/login", server.http_base))
+        .json(&json!({
+            "email": owner.email,
+            "password": "changed-secret-pw-2",
+        }))
+        .send()
+        .await
+        .expect("relogin should return a response")
+        .json()
+        .await
+        .expect("relogin response should be json");
+    let relogin_access = relogin["access_token"]
+        .as_str()
+        .expect("relogin should include access token")
+        .to_string();
+
+    let new_email = format!("changed-{}@example.com", uuid::Uuid::new_v4());
+    let change_email = client
+        .post(format!("{}/v1/me/change-email", server.http_base))
+        .bearer_auth(&relogin_access)
+        .json(&json!({
+            "current_password": "changed-secret-pw-2",
+            "new_email": new_email,
+        }))
+        .send()
+        .await
+        .expect("change email should return a response");
+    assert_eq!(change_email.status(), reqwest::StatusCode::OK);
+    let changed_user: Value = change_email
+        .json()
+        .await
+        .expect("change email response should be json");
+    assert_eq!(changed_user["email"], new_email.as_str());
+    assert_eq!(changed_user["email_verified"], false);
+
+    let new_email_token = fetch_notification_token(&new_email, "email_verification").await;
+    assert!(!new_email_token.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn audit_log_restricted_to_admins() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "audit-owner").await;
+    let outsider = register_user(&client, &server.http_base, "audit-outsider").await;
+
+    create_project(&client, &server.http_base, &owner.access_token, "Audited").await;
+
+    let audit_response = client
+        .get(format!("{}/v1/audit?limit=50", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("audit list should return a response");
+    assert_eq!(audit_response.status(), reqwest::StatusCode::OK);
+    let audit: Value = audit_response
+        .json()
+        .await
+        .expect("audit response should be json");
+    let events = audit["data"]
+        .as_array()
+        .expect("audit data should be array");
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event_type"] == "user.registered"),
+        "audit log should contain the registration event"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event_type"] == "project.created"),
+        "audit log should contain the project creation event"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["actor_user_id"] != outsider.user_id.as_str()),
+        "audit log must not leak another tenant's events"
+    );
+
+    add_membership(&outsider.user_id, &owner.tenant_id, "member").await;
+    let switched: Value = client
+        .post(format!("{}/v1/auth/switch-tenant", server.http_base))
+        .bearer_auth(&outsider.access_token)
+        .json(&json!({ "tenant_id": owner.tenant_id }))
+        .send()
+        .await
+        .expect("switch tenant should return a response")
+        .json()
+        .await
+        .expect("switch tenant response should be json");
+    let member_access = switched["access_token"]
+        .as_str()
+        .expect("switch should include access token");
+
+    let member_audit = client
+        .get(format!("{}/v1/audit", server.http_base))
+        .bearer_auth(member_access)
+        .send()
+        .await
+        .expect("member audit list should return a response");
+    assert_eq!(member_audit.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn csv_export_produces_downloadable_artifact() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "csv-export").await;
+
+    create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "CSV export task",
+        "open",
+        "high",
+    )
+    .await;
+
+    let export_job = client
+        .post(format!("{}/v1/exports/tasks", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .header(
+            "Idempotency-Key",
+            format!("export-{}", uuid::Uuid::new_v4()),
+        )
+        .json(&json!({ "format": "csv" }))
+        .send()
+        .await
+        .expect("csv export creation should return a response");
+    assert_eq!(export_job.status(), reqwest::StatusCode::ACCEPTED);
+    let export_job: Value = export_job
+        .json()
+        .await
+        .expect("csv export response should be json");
+    let job_id = export_job["id"]
+        .as_str()
+        .expect("export job id should exist")
+        .to_string();
+
+    wait_for_rest_job_completion(&client, &server.http_base, &owner.access_token, &job_id).await;
+
+    let result: Value = client
+        .get(format!("{}/v1/jobs/{job_id}/result", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("csv export result should return a response")
+        .json()
+        .await
+        .expect("csv export result should be json");
+    assert_eq!(result["result"]["format"], "csv");
+    assert_eq!(result["result"]["task_count"], 1);
+    assert_eq!(result["result"]["artifact"]["content_type"], "text/csv");
+
+    let artifact = client
+        .get(format!("{}/v1/jobs/{job_id}/artifact", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("csv artifact download should return a response");
+    assert_eq!(artifact.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        artifact
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/csv")
+    );
+    let body = artifact
+        .text()
+        .await
+        .expect("csv artifact should be readable");
+    let mut lines = body.lines();
+    let header = lines.next().expect("csv should have a header row");
+    assert!(header.starts_with("id,"), "unexpected csv header: {header}");
+    assert!(
+        lines.any(|line| line.contains("CSV export task")),
+        "csv should contain the exported task"
+    );
+
+    let anonymous_artifact = client
+        .get(format!("{}/v1/jobs/{job_id}/artifact", server.http_base))
+        .send()
+        .await
+        .expect("anonymous artifact download should return a response");
+    assert_eq!(
+        anonymous_artifact.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn due_reminder_sweep_notifies_assignees() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "reminder-notify").await;
+
+    let due_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let task = client
+        .post(format!("{}/v1/tasks", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .header("Idempotency-Key", format!("task-{}", uuid::Uuid::new_v4()))
+        .json(&json!({
+            "title": "Due soon task",
+            "status": "open",
+            "priority": "high",
+            "assignee_id": owner.user_id,
+            "due_at": due_at,
+        }))
+        .send()
+        .await
+        .expect("task creation should return a response");
+    assert_eq!(task.status(), reqwest::StatusCode::CREATED);
+
+    let mut job_admin = JobAdminClient::connect(server.grpc_base.clone())
+        .await
+        .expect("grpc job client should connect");
+
+    let sweep = job_admin
+        .run_due_reminder_sweep(authed_grpc_request(RunDueReminderSweepRequest {
+            tenant_id: owner.tenant_id.clone(),
+        }))
+        .await
+        .expect("RunDueReminderSweep should succeed")
+        .into_inner();
+    let finished = poll_job_status(&mut job_admin, &sweep.job_id).await;
+    assert_eq!(
+        sweep_notification_count(&finished),
+        1.0,
+        "sweep should report one enqueued notification"
+    );
+    assert_eq!(
+        count_notifications(&owner.email, "task_due_soon").await,
+        1,
+        "sweep should enqueue one due-soon notification"
+    );
+
+    let second_sweep = job_admin
+        .run_due_reminder_sweep(authed_grpc_request(RunDueReminderSweepRequest {
+            tenant_id: owner.tenant_id.clone(),
+        }))
+        .await
+        .expect("second RunDueReminderSweep should succeed")
+        .into_inner();
+    let second_finished = poll_job_status(&mut job_admin, &second_sweep.job_id).await;
+    assert_eq!(
+        sweep_notification_count(&second_finished),
+        0.0,
+        "repeat sweep should be deduplicated"
+    );
+    assert_eq!(
+        count_notifications(&owner.email, "task_due_soon").await,
+        1,
+        "dedupe should keep a single due-soon notification"
+    );
+}
+
+fn sweep_notification_count(reply: &fluxa_backend::grpc::proto::JobReply) -> f64 {
+    let payload = reply
+        .result_payload
+        .as_ref()
+        .expect("sweep should include a result payload");
+    match payload
+        .fields
+        .get("notification_count")
+        .and_then(|value| value.kind.as_ref())
+    {
+        Some(prost_types::value::Kind::NumberValue(number)) => *number,
+        other => panic!("notification_count should be a number, got {other:?}"),
+    }
 }

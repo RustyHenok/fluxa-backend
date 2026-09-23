@@ -30,6 +30,7 @@ pub struct TestServer {
     pub grpc_base: String,
     stdout_path: std::path::PathBuf,
     stderr_path: std::path::PathBuf,
+    artifact_dir: std::path::PathBuf,
 }
 
 impl TestServer {
@@ -40,6 +41,8 @@ impl TestServer {
         let grpc_base = format!("http://127.0.0.1:{grpc_port}");
         let stdout_path = log_path("stack-contract-stdout");
         let stderr_path = log_path("stack-contract-stderr");
+        let artifact_dir =
+            std::env::temp_dir().join(format!("stack-contract-artifacts-{}", Uuid::new_v4()));
         let stdout = File::create(&stdout_path).expect("failed to create test stdout log");
         let stderr = File::create(&stderr_path).expect("failed to create test stderr log");
 
@@ -60,6 +63,9 @@ impl TestServer {
             .env("GRPC_AUTH_TOKEN", TEST_GRPC_AUTH_TOKEN)
             .env("JOB_LEASE_SECONDS", "3")
             .env("WORKER_DISPATCH_INTERVAL_MS", "500")
+            .env("MAILER_PROVIDER", "log")
+            .env("NOTIFY_DISPATCH_INTERVAL_MS", "250")
+            .env("ARTIFACT_STORAGE_DIR", &artifact_dir)
             .env("HTTP_ADDR", format!("127.0.0.1:{http_port}"))
             .env("GRPC_ADDR", format!("127.0.0.1:{grpc_port}"))
             .env("STARTUP_MAX_RETRIES", "10")
@@ -76,6 +82,7 @@ impl TestServer {
             grpc_base,
             stdout_path,
             stderr_path,
+            artifact_dir,
         };
         server.wait_for_ready().await;
         server
@@ -133,6 +140,7 @@ impl Drop for TestServer {
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.stdout_path);
         let _ = std::fs::remove_file(&self.stderr_path);
+        let _ = std::fs::remove_dir_all(&self.artifact_dir);
     }
 }
 
@@ -318,6 +326,66 @@ pub fn authed_grpc_request<T>(message: T) -> tonic::Request<T> {
         header.parse().expect("grpc auth header should parse"),
     );
     request
+}
+
+pub async fn fetch_notification_token(recipient: &str, kind: &str) -> String {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&test_database_url())
+        .await
+        .expect("test database should be reachable");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let token: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT payload->>'token'
+            FROM notifications
+            WHERE recipient = $1 AND kind = $2
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(recipient)
+        .bind(kind)
+        .fetch_optional(&pool)
+        .await
+        .expect("notification lookup should succeed")
+        .flatten();
+
+        if let Some(token) = token {
+            return token;
+        }
+
+        if Instant::now() > deadline {
+            panic!("no {kind} notification for {recipient} appeared in time");
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
+}
+
+pub async fn count_notifications(recipient: &str, kind: &str) -> i64 {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&test_database_url())
+        .await
+        .expect("test database should be reachable");
+
+    sqlx::query_scalar(
+        r#"
+        SELECT count(*)
+        FROM notifications
+        WHERE recipient = $1 AND kind = $2
+        "#,
+    )
+    .bind(recipient)
+    .bind(kind)
+    .fetch_one(&pool)
+    .await
+    .expect("notification count should succeed")
 }
 
 pub async fn insert_stale_running_job(
