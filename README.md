@@ -22,6 +22,12 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - `GET /v1/me`
 - `GET /v1/me/tenants`
 - `GET /v1/tenants/:tenant_id/members`
+- `PATCH /v1/tenants/:tenant_id/members/:member_id`
+- `DELETE /v1/tenants/:tenant_id/members/:member_id`
+- `GET /v1/tenants/:tenant_id/invitations`
+- `POST /v1/tenants/:tenant_id/invitations`
+- `POST /v1/tenants/:tenant_id/invitations/accept`
+- `DELETE /v1/tenants/:tenant_id/invitations/:invitation_id`
 - `GET /v1/projects`
 - `POST /v1/projects`
 - `GET /v1/projects/:project_id`
@@ -44,7 +50,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 
 ## Run locally
 
-1. Copy `.env.example` into `.env` and adjust the values for PostgreSQL, Redis, and `JWT_SECRET`.
+1. Copy `.env.example` into `.env` and adjust the values for PostgreSQL, Redis, `JWT_SECRET`, and `GRPC_AUTH_TOKEN`.
 2. Start PostgreSQL and Redis locally.
 3. Run the service:
 
@@ -65,13 +71,13 @@ docker compose up --build
 Important local ports:
 
 - REST API: `http://127.0.0.1:18080` by default
-- gRPC: `127.0.0.1:15051` by default
+- gRPC: `127.0.0.1:15051` by default (published on the loopback interface only)
 - PostgreSQL: `127.0.0.1:5432`
 - Redis: `127.0.0.1:16379` by default
 
-Set `HTTP_HOST_PORT`, `GRPC_HOST_PORT`, or `REDIS_HOST_PORT` before `docker compose up --build` if you want different published ports.
+Set `HTTP_HOST_PORT`, `GRPC_HOST_PORT`, or `REDIS_HOST_PORT` before `docker compose up --build` if you want different published ports. The gRPC port binds to `127.0.0.1` by default because it carries internal admin APIs; set `GRPC_HOST_BIND` to expose it more broadly.
 
-The compose file uses a development-only JWT secret and local database credentials. Override them before using the stack outside local development.
+The compose file uses a development-only JWT secret, gRPC auth token, and local database credentials. Override them before using the stack outside local development.
 
 ## Smoke test
 
@@ -109,3 +115,5 @@ cargo test --test stack_contracts -- --ignored --nocapture
 
 - `fluxa.internal.v1.JobAdmin`
 - `fluxa.internal.v1.TaskRead`
+
+Every gRPC request must carry an `authorization` metadata entry of the form `Bearer <token>` where the token matches the server's `GRPC_AUTH_TOKEN` setting (minimum 32 characters). Requests without a matching token are rejected with `UNAUTHENTICATED`. The shared token protects the internal admin surface; for production deployments, add mutual TLS between gRPC peers as the next hardening step.

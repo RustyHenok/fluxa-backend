@@ -48,6 +48,15 @@ Both clients should use the REST API. The gRPC surface stays internal-only.
 
 - `POST /v1/auth/logout`
 - revokes the supplied refresh token
+- optionally revokes the paired access token for the rest of its lifetime: send it as `access_token` in the body, or include it as the `Authorization` bearer header
+- request body:
+
+```json
+{
+  "refresh_token": "opaque-token",
+  "access_token": "jwt (optional)"
+}
+```
 
 ### Switch Tenant
 
@@ -127,6 +136,21 @@ Client expectation:
 - `GET /v1/me`
 - `GET /v1/me/tenants`
 - `GET /v1/tenants/:tenant_id/members`
+- `PATCH /v1/tenants/:tenant_id/members/:member_id` (change a member's role)
+- `DELETE /v1/tenants/:tenant_id/members/:member_id` (remove a member)
+- `GET /v1/tenants/:tenant_id/invitations` (owner/admin)
+- `POST /v1/tenants/:tenant_id/invitations` (owner/admin)
+- `POST /v1/tenants/:tenant_id/invitations/accept`
+- `DELETE /v1/tenants/:tenant_id/invitations/:invitation_id` (owner/admin)
+
+### Member Management Rules
+
+- inviting an `admin`, or granting/revoking `owner`/`admin` roles, requires the `owner` role; other member management requires `owner` or `admin`
+- invited roles are limited to `admin` and `member`
+- a tenant always retains at least one `owner`; demoting or removing the last owner returns `409`
+- `POST .../invitations` returns the single-use invitation `token` exactly once in the response; the inviter shares it out of band (interim behavior until invitation emails ship)
+- the invitee calls `POST /v1/tenants/:tenant_id/invitations/accept` with `{ "token": "..." }` while authenticated; the invitation must match their account email and is single-use with an expiry (default 72h)
+- removing a member revokes that member's refresh tokens for the tenant
 
 ### Tasks
 

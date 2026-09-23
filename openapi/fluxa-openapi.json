@@ -172,6 +172,88 @@
         ],
         "type": "object"
       },
+      "InvitationAcceptPayload": {
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
+      "InvitationCreatePayload": {
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "description": "Role granted on acceptance. Owners cannot be invited.",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "role"
+        ],
+        "type": "object"
+      },
+      "InvitationCreateResponse": {
+        "properties": {
+          "invitation": {
+            "$ref": "#/components/schemas/InvitationResponse"
+          },
+          "token": {
+            "description": "Single-use invitation token, returned exactly once. Interim behavior until invitation emails are supported.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invitation",
+          "token"
+        ],
+        "type": "object"
+      },
+      "InvitationResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/MembershipRole"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "email",
+          "role",
+          "expires_at",
+          "created_at"
+        ],
+        "type": "object"
+      },
       "JobResponse": {
         "properties": {
           "attempts": {
@@ -333,6 +415,10 @@
       },
       "LogoutRequest": {
         "properties": {
+          "access_token": {
+            "description": "Optional access token to revoke alongside the refresh token. When omitted, the Authorization bearer token is used if present.",
+            "type": "string"
+          },
           "refresh_token": {
             "type": "string"
           }
@@ -354,6 +440,17 @@
         "required": [
           "user",
           "active_tenant"
+        ],
+        "type": "object"
+      },
+      "MemberRolePayload": {
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/MembershipRole"
+          }
+        },
+        "required": [
+          "role"
         ],
         "type": "object"
       },
@@ -1085,6 +1182,7 @@
     },
     "/v1/auth/logout": {
       "post": {
+        "description": "Revokes the refresh token. If an access token is supplied in the body or via the Authorization header, its `jti` is denylisted for the remainder of its lifetime.",
         "operationId": "logout",
         "requestBody": {
           "content": {
@@ -1142,7 +1240,7 @@
           }
         },
         "security": [],
-        "summary": "Revoke a refresh token",
+        "summary": "Revoke a refresh token and optionally its access token",
         "tags": [
           "auth"
         ]
@@ -2835,6 +2933,366 @@
         ]
       }
     },
+    "/v1/tenants/{tenant_id}/invitations": {
+      "get": {
+        "description": "Requires owner or admin role.",
+        "operationId": "listTenantInvitations",
+        "parameters": [
+          {
+            "description": "Tenant identifier.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InvitationResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Pending invitations."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Owner or admin role is required."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Tenant was not found for the active membership."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "List pending invitations for the active tenant",
+        "tags": [
+          "tenants"
+        ]
+      },
+      "post": {
+        "description": "Requires owner or admin role; inviting an admin requires the owner role. The response includes the single-use invitation token exactly once. Until email delivery lands, the inviter distributes this token out of band (interim behavior).",
+        "operationId": "createTenantInvitation",
+        "parameters": [
+          {
+            "description": "Tenant identifier.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationCreatePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationCreateResponse"
+                }
+              }
+            },
+            "description": "Invitation created."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid invitation payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Caller role does not permit this invitation."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Tenant was not found for the active membership."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "User is already a member or already invited."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Invite a user to the active tenant",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/v1/tenants/{tenant_id}/invitations/accept": {
+      "post": {
+        "description": "The invitation must target the authenticated user's email address, be unexpired, and be unused. Returns the new membership.",
+        "operationId": "acceptTenantInvitation",
+        "parameters": [
+          {
+            "description": "Tenant identifier.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationAcceptPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantMembershipResponse"
+                }
+              }
+            },
+            "description": "Invitation accepted."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid acceptance payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invitation email does not match the authenticated user."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invitation was not found, expired, or already used."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "User is already a member of this tenant."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Accept an invitation to join a tenant",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/v1/tenants/{tenant_id}/invitations/{invitation_id}": {
+      "delete": {
+        "description": "Requires owner or admin role.",
+        "operationId": "revokeTenantInvitation",
+        "parameters": [
+          {
+            "description": "Tenant identifier.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Invitation identifier.",
+            "in": "path",
+            "name": "invitation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Invitation revoked."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Owner or admin role is required."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Tenant or pending invitation was not found."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Revoke a pending invitation",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
     "/v1/tenants/{tenant_id}/members": {
       "get": {
         "operationId": "listTenantMembers",
@@ -2896,6 +3354,205 @@
           }
         },
         "summary": "List members of the active tenant",
+        "tags": [
+          "tenants"
+        ]
+      }
+    },
+    "/v1/tenants/{tenant_id}/members/{member_id}": {
+      "delete": {
+        "description": "Requires owner or admin role; removing an owner or admin requires the owner role. The last owner cannot be removed. The member's refresh tokens for this tenant are revoked.",
+        "operationId": "removeTenantMember",
+        "parameters": [
+          {
+            "description": "Tenant identifier.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "User identifier of the member.",
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Member removed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Caller role does not permit removing this member."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Tenant or member was not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A tenant must retain at least one owner."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Remove a member from the active tenant",
+        "tags": [
+          "tenants"
+        ]
+      },
+      "patch": {
+        "description": "Requires owner or admin role. Granting or revoking `owner`/`admin` roles requires the owner role. The last owner of a tenant cannot be demoted.",
+        "operationId": "updateTenantMemberRole",
+        "parameters": [
+          {
+            "description": "Tenant identifier.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "User identifier of the member.",
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberRolePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantMemberResponse"
+                }
+              }
+            },
+            "description": "Member role updated."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid role payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Caller role does not permit this role change."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Tenant or member was not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A tenant must retain at least one owner."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Update a member's role in the active tenant",
         "tags": [
           "tenants"
         ]

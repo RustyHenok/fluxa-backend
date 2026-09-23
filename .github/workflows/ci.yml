@@ -18,7 +18,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -26,8 +26,17 @@ jobs:
       - name: Install smoke test dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
       - name: Check formatting
         run: cargo fmt --check
+
+      - name: Lint with clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Audit dependencies for advisories
+        run: cargo audit
 
       - name: Generate OpenAPI spec
         run: ./scripts/generate_openapi.sh

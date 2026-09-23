@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 mod support;
 
 use support::{
-    TestServer, add_membership, create_project, create_task, poll_job_status, register_user,
-    stack_test_guard, wait_for_rest_job_completion,
+    TestServer, add_membership, authed_grpc_request, create_project, create_task,
+    insert_stale_running_job, poll_job_status, register_user, stack_test_guard,
+    wait_for_job_status, wait_for_rest_job_completion,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -400,11 +401,37 @@ async fn grpc_contracts_expose_tasks_and_jobs() {
     let mut task_read = TaskReadClient::connect(server.grpc_base.clone())
         .await
         .expect("grpc task client should connect");
-    let snapshot = task_read
+    let unauthenticated = task_read
         .get_task_snapshot(GetTaskSnapshotRequest {
             tenant_id: owner.tenant_id.clone(),
             task_id: task_id.clone(),
         })
+        .await
+        .expect_err("gRPC requests without an auth token should be rejected");
+    assert_eq!(unauthenticated.code(), tonic::Code::Unauthenticated);
+
+    let mut bad_token_request = tonic::Request::new(GetTaskSnapshotRequest {
+        tenant_id: owner.tenant_id.clone(),
+        task_id: task_id.clone(),
+    });
+    bad_token_request.metadata_mut().insert(
+        "authorization",
+        ["Bearer", "wrong-token-wrong-token-wrong-token"]
+            .join(" ")
+            .parse()
+            .expect("metadata should parse"),
+    );
+    let bad_token = task_read
+        .get_task_snapshot(bad_token_request)
+        .await
+        .expect_err("gRPC requests with a wrong token should be rejected");
+    assert_eq!(bad_token.code(), tonic::Code::Unauthenticated);
+
+    let snapshot = task_read
+        .get_task_snapshot(authed_grpc_request(GetTaskSnapshotRequest {
+            tenant_id: owner.tenant_id.clone(),
+            task_id: task_id.clone(),
+        }))
         .await
         .expect("GetTaskSnapshot should succeed")
         .into_inner();
@@ -413,7 +440,7 @@ async fn grpc_contracts_expose_tasks_and_jobs() {
     assert_eq!(snapshot.status, "open");
 
     let list = task_read
-        .list_task_summaries(ListTaskSummariesRequest {
+        .list_task_summaries(authed_grpc_request(ListTaskSummariesRequest {
             tenant_id: owner.tenant_id.clone(),
             limit: 10,
             cursor: String::new(),
@@ -424,7 +451,7 @@ async fn grpc_contracts_expose_tasks_and_jobs() {
             due_after: String::new(),
             updated_after: String::new(),
             q: "gRPC".into(),
-        })
+        }))
         .await
         .expect("ListTaskSummaries should succeed")
         .into_inner();
@@ -437,7 +464,7 @@ async fn grpc_contracts_expose_tasks_and_jobs() {
         .await
         .expect("grpc job client should connect");
     let job = job_admin
-        .enqueue_export(EnqueueExportRequest {
+        .enqueue_export(authed_grpc_request(EnqueueExportRequest {
             tenant_id: owner.tenant_id.clone(),
             requested_by: owner.user_id.clone(),
             status: "open".into(),
@@ -447,7 +474,7 @@ async fn grpc_contracts_expose_tasks_and_jobs() {
             due_after: String::new(),
             updated_after: String::new(),
             q: "gRPC".into(),
-        })
+        }))
         .await
         .expect("EnqueueExport should succeed")
         .into_inner();
@@ -458,4 +485,274 @@ async fn grpc_contracts_expose_tasks_and_jobs() {
     let finished = poll_job_status(&mut job_admin, &job.job_id).await;
     assert_eq!(finished.status, "completed");
     assert!(finished.result_payload.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn member_management_enforces_role_rules() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+
+    let owner = register_user(&client, &server.http_base, "member-mgmt-owner").await;
+    let invitee = register_user(&client, &server.http_base, "member-mgmt-invitee").await;
+
+    let invite_response = client
+        .post(format!(
+            "{}/v1/tenants/{}/invitations",
+            server.http_base, owner.tenant_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "email": invitee.email, "role": "member" }))
+        .send()
+        .await
+        .expect("invitation creation should return a response");
+    assert_eq!(invite_response.status(), reqwest::StatusCode::CREATED);
+    let invite: Value = invite_response
+        .json()
+        .await
+        .expect("invitation response should be json");
+    let invitation_token = invite["token"]
+        .as_str()
+        .expect("invitation should include a token")
+        .to_string();
+    assert_eq!(invite["invitation"]["email"], invitee.email);
+    assert_eq!(invite["invitation"]["role"], "member");
+
+    let duplicate = client
+        .post(format!(
+            "{}/v1/tenants/{}/invitations",
+            server.http_base, owner.tenant_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "email": invitee.email, "role": "member" }))
+        .send()
+        .await
+        .expect("duplicate invitation should return a response");
+    assert_eq!(duplicate.status(), reqwest::StatusCode::CONFLICT);
+
+    let listed = client
+        .get(format!(
+            "{}/v1/tenants/{}/invitations",
+            server.http_base, owner.tenant_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("invitation list should return a response");
+    assert_eq!(listed.status(), reqwest::StatusCode::OK);
+    let listed: Value = listed.json().await.expect("list should be json");
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
+
+    let wrong_user = register_user(&client, &server.http_base, "member-mgmt-wrong").await;
+    let mismatched = client
+        .post(format!(
+            "{}/v1/tenants/{}/invitations/accept",
+            server.http_base, owner.tenant_id
+        ))
+        .bearer_auth(&wrong_user.access_token)
+        .json(&json!({ "token": invitation_token }))
+        .send()
+        .await
+        .expect("mismatched acceptance should return a response");
+    assert_eq!(mismatched.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let accepted = client
+        .post(format!(
+            "{}/v1/tenants/{}/invitations/accept",
+            server.http_base, owner.tenant_id
+        ))
+        .bearer_auth(&invitee.access_token)
+        .json(&json!({ "token": invitation_token }))
+        .send()
+        .await
+        .expect("acceptance should return a response");
+    assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+    let membership: Value = accepted.json().await.expect("membership should be json");
+    assert_eq!(membership["tenant_id"], owner.tenant_id);
+    assert_eq!(membership["role"], "member");
+
+    let replay = client
+        .post(format!(
+            "{}/v1/tenants/{}/invitations/accept",
+            server.http_base, owner.tenant_id
+        ))
+        .bearer_auth(&invitee.access_token)
+        .json(&json!({ "token": invitation_token }))
+        .send()
+        .await
+        .expect("token replay should return a response");
+    assert_eq!(replay.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let switched = client
+        .post(format!("{}/v1/auth/switch-tenant", server.http_base))
+        .bearer_auth(&invitee.access_token)
+        .json(&json!({ "tenant_id": owner.tenant_id }))
+        .send()
+        .await
+        .expect("switch-tenant should return a response");
+    assert_eq!(switched.status(), reqwest::StatusCode::OK);
+    let switched: Value = switched.json().await.expect("switch should be json");
+    let member_access = switched["access_token"]
+        .as_str()
+        .expect("switch should return access token")
+        .to_string();
+
+    let forbidden_invite = client
+        .post(format!(
+            "{}/v1/tenants/{}/invitations",
+            server.http_base, owner.tenant_id
+        ))
+        .bearer_auth(&member_access)
+        .json(&json!({ "email": "someone@example.com", "role": "member" }))
+        .send()
+        .await
+        .expect("member invite attempt should return a response");
+    assert_eq!(forbidden_invite.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let forbidden_removal = client
+        .delete(format!(
+            "{}/v1/tenants/{}/members/{}",
+            server.http_base, owner.tenant_id, owner.user_id
+        ))
+        .bearer_auth(&member_access)
+        .send()
+        .await
+        .expect("member removal attempt should return a response");
+    assert_eq!(forbidden_removal.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let last_owner_demotion = client
+        .patch(format!(
+            "{}/v1/tenants/{}/members/{}",
+            server.http_base, owner.tenant_id, owner.user_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "role": "member" }))
+        .send()
+        .await
+        .expect("last-owner demotion should return a response");
+    assert_eq!(last_owner_demotion.status(), reqwest::StatusCode::CONFLICT);
+
+    let promoted = client
+        .patch(format!(
+            "{}/v1/tenants/{}/members/{}",
+            server.http_base, owner.tenant_id, invitee.user_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "role": "admin" }))
+        .send()
+        .await
+        .expect("promotion should return a response");
+    assert_eq!(promoted.status(), reqwest::StatusCode::OK);
+    let promoted: Value = promoted.json().await.expect("promotion should be json");
+    assert_eq!(promoted["role"], "admin");
+
+    let removed = client
+        .delete(format!(
+            "{}/v1/tenants/{}/members/{}",
+            server.http_base, owner.tenant_id, invitee.user_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("member removal should return a response");
+    assert_eq!(removed.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let removed_member_access = client
+        .get(format!("{}/v1/dashboard/summary", server.http_base))
+        .bearer_auth(&member_access)
+        .send()
+        .await
+        .expect("removed member access should return a response");
+    assert_eq!(
+        removed_member_access.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn stale_running_jobs_are_reaped() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "reaper").await;
+
+    let export_payload = json!({
+        "tenant_id": owner.tenant_id,
+        "requested_by": owner.user_id,
+        "filters": {},
+    });
+
+    let recoverable_job = insert_stale_running_job(&owner.tenant_id, &export_payload, 1, 5).await;
+    let recovered = wait_for_job_status(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        &recoverable_job,
+        &["completed"],
+    )
+    .await;
+    assert_eq!(recovered["status"], "completed");
+
+    let exhausted_job = insert_stale_running_job(&owner.tenant_id, &export_payload, 5, 5).await;
+    let dead_lettered = wait_for_job_status(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        &exhausted_job,
+        &["dead_letter"],
+    )
+    .await;
+    assert_eq!(dead_lettered["status"], "dead_letter");
+    assert_eq!(
+        dead_lettered["last_error"],
+        "job lease expired before completion"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn logout_denylists_access_token() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "logout-denylist").await;
+
+    let me_before = client
+        .get(format!("{}/v1/me", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("/v1/me before logout should return a response");
+    assert_eq!(me_before.status(), reqwest::StatusCode::OK);
+
+    let logout = client
+        .post(format!("{}/v1/auth/logout", server.http_base))
+        .json(&json!({
+            "refresh_token": owner.refresh_token,
+            "access_token": owner.access_token,
+        }))
+        .send()
+        .await
+        .expect("logout should return a response");
+    assert_eq!(logout.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let refresh_after = client
+        .post(format!("{}/v1/auth/refresh", server.http_base))
+        .json(&json!({ "refresh_token": owner.refresh_token }))
+        .send()
+        .await
+        .expect("refresh after logout should return a response");
+    assert_eq!(refresh_after.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let me_after = client
+        .get(format!("{}/v1/me", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("/v1/me after logout should return a response");
+    assert_eq!(me_after.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let body: Value = me_after.json().await.expect("error should be json");
+    assert_eq!(body["error"]["code"], "unauthorized");
 }

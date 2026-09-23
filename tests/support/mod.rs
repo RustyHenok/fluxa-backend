@@ -17,6 +17,7 @@ use uuid::Uuid;
 const DEFAULT_TEST_DATABASE_URL: &str = "postgres://postgres:postgres@127.0.0.1:5432/fluxa";
 const DEFAULT_TEST_REDIS_URL: &str = "redis://127.0.0.1:16379/";
 const TEST_JWT_SECRET: &str = "integration-test-secret-integration-test";
+pub const TEST_GRPC_AUTH_TOKEN: &str = "integration-test-grpc-token-integration-test";
 static STACK_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 pub async fn stack_test_guard() -> MutexGuard<'static, ()> {
@@ -56,6 +57,9 @@ impl TestServer {
                     .unwrap_or_else(|_| DEFAULT_TEST_REDIS_URL.to_string()),
             )
             .env("JWT_SECRET", TEST_JWT_SECRET)
+            .env("GRPC_AUTH_TOKEN", TEST_GRPC_AUTH_TOKEN)
+            .env("JOB_LEASE_SECONDS", "3")
+            .env("WORKER_DISPATCH_INTERVAL_MS", "500")
             .env("HTTP_ADDR", format!("127.0.0.1:{http_port}"))
             .env("GRPC_ADDR", format!("127.0.0.1:{grpc_port}"))
             .env("STARTUP_MAX_RETRIES", "10")
@@ -251,9 +255,9 @@ pub async fn poll_job_status(client: &mut JobAdminClient<Channel>, job_id: &str)
 
     loop {
         let response = client
-            .get_job_status(GetJobStatusRequest {
+            .get_job_status(authed_grpc_request(GetJobStatusRequest {
                 job_id: job_id.to_string(),
-            })
+            }))
             .await
             .expect("get_job_status should succeed")
             .into_inner();
@@ -303,6 +307,89 @@ pub async fn wait_for_rest_job_completion(
         }
 
         sleep(Duration::from_millis(500)).await;
+    }
+}
+
+pub fn authed_grpc_request<T>(message: T) -> tonic::Request<T> {
+    let mut request = tonic::Request::new(message);
+    let header = format!("Bearer {TEST_GRPC_AUTH_TOKEN}");
+    request.metadata_mut().insert(
+        "authorization",
+        header.parse().expect("grpc auth header should parse"),
+    );
+    request
+}
+
+pub async fn insert_stale_running_job(
+    tenant_id: &str,
+    payload: &Value,
+    attempts: i32,
+    max_attempts: i32,
+) -> String {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&test_database_url())
+        .await
+        .expect("test database should be reachable");
+
+    let job_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO background_jobs
+            (id, tenant_id, job_type, payload, status, attempts, max_attempts,
+             scheduled_at, started_at)
+        VALUES
+            ($1, $2, 'task_export', $3, 'running', $4, $5,
+             now() - interval '10 minutes', now() - interval '10 minutes')
+        "#,
+    )
+    .bind(job_id)
+    .bind(Uuid::parse_str(tenant_id).expect("tenant id should be uuid"))
+    .bind(payload)
+    .bind(attempts)
+    .bind(max_attempts)
+    .execute(&pool)
+    .await
+    .expect("stale job insert should succeed");
+
+    job_id.to_string()
+}
+
+pub async fn wait_for_job_status(
+    client: &Client,
+    base: &str,
+    access_token: &str,
+    job_id: &str,
+    statuses: &[&str],
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    loop {
+        let response = client
+            .get(format!("{base}/v1/jobs/{job_id}"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .expect("job status request should succeed");
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body: Value = response
+            .json()
+            .await
+            .expect("job status response should be json");
+
+        if let Some(status) = body["status"].as_str()
+            && statuses.contains(&status)
+        {
+            return body;
+        }
+
+        if Instant::now() > deadline {
+            panic!("job {job_id} did not reach one of {statuses:?} in time; last: {body}");
+        }
+
+        sleep(Duration::from_millis(250)).await;
     }
 }
 

@@ -40,10 +40,13 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/fluxa
       REDIS_URL: redis://redis/
       JWT_SECRET: local-development-secret-local-development
+      GRPC_AUTH_TOKEN: local-development-grpc-token-local-development
       CORS_ALLOW_ORIGIN: "*"
     ports:
       - "${HTTP_HOST_PORT:-18080}:8080"
-      - "${GRPC_HOST_PORT:-15051}:50051"
+      # gRPC carries internal admin APIs; bind to loopback only by default.
+      # Override GRPC_HOST_BIND to expose it beyond the local machine.
+      - "${GRPC_HOST_BIND:-127.0.0.1}:${GRPC_HOST_PORT:-15051}:50051"
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,6 +62,7 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/fluxa
       REDIS_URL: redis://redis/
       JWT_SECRET: local-development-secret-local-development
+      GRPC_AUTH_TOKEN: local-development-grpc-token-local-development
     depends_on:
       postgres:
         condition: service_healthy

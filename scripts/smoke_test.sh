@@ -207,6 +207,50 @@ JOB_RESULT_JSON="$(curl -sS "$BASE/v1/jobs/$JOB_ID/result" -H "Authorization: Be
 [[ "$(jq -r '.result.tasks[0].id' <<<"$JOB_RESULT_JSON")" == "$TASK_ID" ]] || fail "job result endpoint did not include the expected task"
 [[ "$(jq -r '.result.tasks[0].project_id' <<<"$JOB_RESULT_JSON")" == "$PROJECT_ID" ]] || fail "job result endpoint did not include the expected project linkage"
 
+step "Invite a second member and enforce role boundaries"
+MEMBER_EMAIL="smoke-member-$(date +%s)-$RANDOM@example.com"
+MEMBER_REGISTER_JSON="$(
+  curl -sS -X POST "$BASE/v1/auth/register" \
+    -H 'content-type: application/json' \
+    -d "{\"email\":\"$MEMBER_EMAIL\",\"password\":\"$PASSWORD\",\"tenant_name\":\"$TENANT_NAME Member\"}"
+)"
+MEMBER_ACCESS_TOKEN="$(jq -er '.access_token' <<<"$MEMBER_REGISTER_JSON")"
+
+INVITE_JSON="$(
+  curl -sS -X POST "$BASE/v1/tenants/$TENANT_ID/invitations" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"email\":\"$MEMBER_EMAIL\",\"role\":\"member\"}"
+)"
+INVITE_TOKEN="$(jq -er '.token' <<<"$INVITE_JSON")"
+[[ "$(jq -r '.invitation.role' <<<"$INVITE_JSON")" == "member" ]] || fail "invitation did not carry the member role"
+
+ACCEPT_JSON="$(
+  curl -sS -X POST "$BASE/v1/tenants/$TENANT_ID/invitations/accept" \
+    -H "Authorization: Bearer $MEMBER_ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"token\":\"$INVITE_TOKEN\"}"
+)"
+[[ "$(jq -r '.role' <<<"$ACCEPT_JSON")" == "member" ]] || fail "invitation acceptance did not grant the member role"
+
+MEMBER_SWITCH_JSON="$(
+  curl -sS -X POST "$BASE/v1/auth/switch-tenant" \
+    -H "Authorization: Bearer $MEMBER_ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"tenant_id\":\"$TENANT_ID\"}"
+)"
+MEMBER_SCOPED_TOKEN="$(jq -er '.access_token' <<<"$MEMBER_SWITCH_JSON")"
+
+capture_http POST "$BASE/v1/projects" \
+  -H "Authorization: Bearer $MEMBER_SCOPED_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"name":"Forbidden project"}'
+[[ "$HTTP_STATUS" == "403" ]] || fail "member role was not blocked from creating a project"
+[[ "$(jq -r '.error.code' <<<"$HTTP_BODY")" == "forbidden" ]] || fail "member project creation did not return the forbidden envelope"
+
+MEMBERS_JSON="$(curl -sS "$BASE/v1/tenants/$TENANT_ID/members" -H "Authorization: Bearer $MEMBER_SCOPED_TOKEN")"
+[[ "$(jq -r 'length' <<<"$MEMBERS_JSON")" == "2" ]] || fail "member list did not include both members"
+
 step "Refresh and logout"
 REFRESH_JSON="$(
   curl -sS -X POST "$BASE/v1/auth/refresh" \
@@ -218,7 +262,7 @@ NEXT_REFRESH_TOKEN="$(jq -er '.refresh_token' <<<"$REFRESH_JSON")"
 LOGOUT_STATUS="$(
   curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/auth/logout" \
     -H 'content-type: application/json' \
-    -d "{\"refresh_token\":\"$NEXT_REFRESH_TOKEN\"}"
+    -d "{\"refresh_token\":\"$NEXT_REFRESH_TOKEN\",\"access_token\":\"$ACCESS_TOKEN\"}"
 )"
 [[ "$LOGOUT_STATUS" == "204" ]] || fail "logout did not return 204"
 
@@ -228,6 +272,9 @@ capture_http POST "$BASE/v1/auth/refresh" \
   -d "{\"refresh_token\":\"$NEXT_REFRESH_TOKEN\"}"
 [[ "$HTTP_STATUS" == "401" ]] || fail "revoked refresh token did not return 401"
 [[ "$(jq -r '.error.code' <<<"$HTTP_BODY")" == "unauthorized" ]] || fail "revoked refresh token did not return the expected error envelope"
+
+capture_http GET "$BASE/v1/me" -H "Authorization: Bearer $ACCESS_TOKEN"
+[[ "$HTTP_STATUS" == "401" ]] || fail "denylisted access token was not rejected after logout"
 
 METRICS_TEXT="$(curl -sS "$BASE/metrics")"
 grep -q 'http_requests_total' <<<"$METRICS_TEXT" || fail "/metrics did not include http_requests_total"

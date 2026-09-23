@@ -114,7 +114,8 @@ pub fn document() -> Value {
                 "post": {
                     "tags": ["auth"],
                     "operationId": "logout",
-                    "summary": "Revoke a refresh token",
+                    "summary": "Revoke a refresh token and optionally its access token",
+                    "description": "Revokes the refresh token. If an access token is supplied in the body or via the Authorization header, its `jti` is denylisted for the remainder of its lifetime.",
                     "security": [],
                     "requestBody": json_request_body(schema_ref("LogoutRequest"), true),
                     "responses": {
@@ -203,6 +204,130 @@ pub fn document() -> Value {
                         },
                         "401": error_response("Authentication is required."),
                         "404": error_response("Tenant was not found for the active membership."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tenants/{tenant_id}/members/{member_id}": {
+                "patch": {
+                    "tags": ["tenants"],
+                    "operationId": "updateTenantMemberRole",
+                    "summary": "Update a member's role in the active tenant",
+                    "description": "Requires owner or admin role. Granting or revoking `owner`/`admin` roles requires the owner role. The last owner of a tenant cannot be demoted.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier."),
+                        path_uuid_parameter("member_id", "User identifier of the member.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("MemberRolePayload"), true),
+                    "responses": {
+                        "200": json_response("Member role updated.", schema_ref("TenantMemberResponse")),
+                        "400": error_response("Invalid role payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Caller role does not permit this role change."),
+                        "404": error_response("Tenant or member was not found."),
+                        "409": error_response("A tenant must retain at least one owner."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["tenants"],
+                    "operationId": "removeTenantMember",
+                    "summary": "Remove a member from the active tenant",
+                    "description": "Requires owner or admin role; removing an owner or admin requires the owner role. The last owner cannot be removed. The member's refresh tokens for this tenant are revoked.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier."),
+                        path_uuid_parameter("member_id", "User identifier of the member.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Member removed."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Caller role does not permit removing this member."),
+                        "404": error_response("Tenant or member was not found."),
+                        "409": error_response("A tenant must retain at least one owner."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tenants/{tenant_id}/invitations": {
+                "get": {
+                    "tags": ["tenants"],
+                    "operationId": "listTenantInvitations",
+                    "summary": "List pending invitations for the active tenant",
+                    "description": "Requires owner or admin role.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Pending invitations.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("InvitationResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Owner or admin role is required."),
+                        "404": error_response("Tenant was not found for the active membership."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["tenants"],
+                    "operationId": "createTenantInvitation",
+                    "summary": "Invite a user to the active tenant",
+                    "description": "Requires owner or admin role; inviting an admin requires the owner role. The response includes the single-use invitation token exactly once. Until email delivery lands, the inviter distributes this token out of band (interim behavior).",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("InvitationCreatePayload"), true),
+                    "responses": {
+                        "201": json_response("Invitation created.", schema_ref("InvitationCreateResponse")),
+                        "400": error_response("Invalid invitation payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Caller role does not permit this invitation."),
+                        "404": error_response("Tenant was not found for the active membership."),
+                        "409": error_response("User is already a member or already invited."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tenants/{tenant_id}/invitations/accept": {
+                "post": {
+                    "tags": ["tenants"],
+                    "operationId": "acceptTenantInvitation",
+                    "summary": "Accept an invitation to join a tenant",
+                    "description": "The invitation must target the authenticated user's email address, be unexpired, and be unused. Returns the new membership.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("InvitationAcceptPayload"), true),
+                    "responses": {
+                        "200": json_response("Invitation accepted.", schema_ref("TenantMembershipResponse")),
+                        "400": error_response("Invalid acceptance payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Invitation email does not match the authenticated user."),
+                        "404": error_response("Invitation was not found, expired, or already used."),
+                        "409": error_response("User is already a member of this tenant."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tenants/{tenant_id}/invitations/{invitation_id}": {
+                "delete": {
+                    "tags": ["tenants"],
+                    "operationId": "revokeTenantInvitation",
+                    "summary": "Revoke a pending invitation",
+                    "description": "Requires owner or admin role.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier."),
+                        path_uuid_parameter("invitation_id", "Invitation identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Invitation revoked."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Owner or admin role is required."),
+                        "404": error_response("Tenant or pending invitation was not found."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -661,7 +786,60 @@ pub fn document() -> Value {
                     "type": "object",
                     "required": ["refresh_token"],
                     "properties": {
-                        "refresh_token": string_schema()
+                        "refresh_token": string_schema(),
+                        "access_token": {
+                            "type": "string",
+                            "description": "Optional access token to revoke alongside the refresh token. When omitted, the Authorization bearer token is used if present."
+                        }
+                    }
+                },
+                "InvitationCreatePayload": {
+                    "type": "object",
+                    "required": ["email", "role"],
+                    "properties": {
+                        "email": string_schema(),
+                        "role": {
+                            "type": "string",
+                            "enum": ["admin", "member"],
+                            "description": "Role granted on acceptance. Owners cannot be invited."
+                        }
+                    }
+                },
+                "InvitationAcceptPayload": {
+                    "type": "object",
+                    "required": ["token"],
+                    "properties": {
+                        "token": string_schema()
+                    }
+                },
+                "MemberRolePayload": {
+                    "type": "object",
+                    "required": ["role"],
+                    "properties": {
+                        "role": schema_ref("MembershipRole")
+                    }
+                },
+                "InvitationResponse": {
+                    "type": "object",
+                    "required": ["id", "tenant_id", "email", "role", "expires_at", "created_at"],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "tenant_id": uuid_schema(),
+                        "email": string_schema(),
+                        "role": schema_ref("MembershipRole"),
+                        "expires_at": date_time_schema(),
+                        "created_at": date_time_schema()
+                    }
+                },
+                "InvitationCreateResponse": {
+                    "type": "object",
+                    "required": ["invitation", "token"],
+                    "properties": {
+                        "invitation": schema_ref("InvitationResponse"),
+                        "token": {
+                            "type": "string",
+                            "description": "Single-use invitation token, returned exactly once. Interim behavior until invitation emails are supported."
+                        }
                     }
                 },
                 "SwitchTenantRequest": {
