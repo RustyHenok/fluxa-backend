@@ -42,6 +42,10 @@ services:
       JWT_SECRET: local-development-secret-local-development
       GRPC_AUTH_TOKEN: local-development-grpc-token-local-development
       CORS_ALLOW_ORIGIN: "*"
+      MAILER_PROVIDER: ${MAILER_PROVIDER:-log}
+      ARTIFACT_STORAGE_DIR: /var/lib/fluxa/exports
+    volumes:
+      - exports-data:/var/lib/fluxa/exports
     ports:
       - "${HTTP_HOST_PORT:-18080}:8080"
       # gRPC carries internal admin APIs; bind to loopback only by default.
@@ -63,6 +67,10 @@ services:
       REDIS_URL: redis://redis/
       JWT_SECRET: local-development-secret-local-development
       GRPC_AUTH_TOKEN: local-development-grpc-token-local-development
+      MAILER_PROVIDER: ${MAILER_PROVIDER:-log}
+      ARTIFACT_STORAGE_DIR: /var/lib/fluxa/exports
+    volumes:
+      - exports-data:/var/lib/fluxa/exports
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,3 +80,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  exports-data:

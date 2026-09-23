@@ -17,12 +17,11 @@ use crate::domain::{
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
-    account as account_service, audit as audit_service, auth as auth_service,
-    jobs as jobs_service, memberships as membership_service, projects as project_service,
-    tasks as task_service,
+    account as account_service, audit as audit_service, auth as auth_service, jobs as jobs_service,
+    memberships as membership_service, projects as project_service, tasks as task_service,
 };
-use crate::storage::ArtifactStore;
 use crate::state::AppState;
+use crate::storage::ArtifactStore;
 
 use super::AuthenticatedUser;
 use super::dto::{
@@ -368,7 +367,8 @@ pub(super) async fn remove_member(
 ) -> AppResult<StatusCode> {
     ensure_active_tenant(user.tenant_id, tenant_id)?;
     ensure_admin_role(user.role)?;
-    membership_service::remove_member(&state, tenant_id, user.role, user.user_id, member_id).await?;
+    membership_service::remove_member(&state, tenant_id, user.role, user.user_id, member_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

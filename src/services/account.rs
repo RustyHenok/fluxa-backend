@@ -135,7 +135,10 @@ pub async fn change_password(
         .map_err(|_| AppError::Unauthorized("current password is incorrect".into()))?;
 
     let password_hash = state.auth.hash_password(new_password)?;
-    state.db.update_user_password(user.id, &password_hash).await?;
+    state
+        .db
+        .update_user_password(user.id, &password_hash)
+        .await?;
     state.db.revoke_all_user_refresh_tokens(user.id).await?;
 
     audit::record_event(

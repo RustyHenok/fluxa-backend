@@ -22,7 +22,9 @@ pub fn document() -> Value {
             { "name": "tenants", "description": "Tenant-scoped membership endpoints." },
             { "name": "projects", "description": "Tenant-scoped project hierarchy endpoints." },
             { "name": "tasks", "description": "Task CRUD, filtering, and audit endpoints." },
-            { "name": "jobs", "description": "Background job creation, status, and results." }
+            { "name": "jobs", "description": "Background job creation, status, and results." },
+            { "name": "account", "description": "Account lifecycle: email verification, password reset, credential changes." },
+            { "name": "audit", "description": "Tenant audit trail endpoints." }
         ],
         "security": [
             { "bearerAuth": [] }
@@ -127,6 +129,71 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/auth/verify-email": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "verifyEmail",
+                    "summary": "Verify an email address with a single-use token",
+                    "security": [],
+                    "requestBody": json_request_body(schema_ref("VerifyEmailPayload"), true),
+                    "responses": {
+                        "204": no_content_response("Email address verified."),
+                        "400": error_response("Invalid verification payload."),
+                        "401": error_response("Token was invalid or expired."),
+                        "429": error_response("Too many attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/auth/resend-verification": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "resendVerification",
+                    "summary": "Re-send the email verification message",
+                    "description": "Always returns 202 regardless of whether the email exists, to avoid account enumeration.",
+                    "security": [],
+                    "requestBody": json_request_body(schema_ref("ResendVerificationPayload"), true),
+                    "responses": {
+                        "202": no_content_response("Verification email enqueued if the account exists."),
+                        "400": error_response("Invalid payload."),
+                        "429": error_response("Too many attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/auth/password-reset/request": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "requestPasswordReset",
+                    "summary": "Request a password reset token",
+                    "description": "Always returns 202 regardless of whether the email exists, to avoid account enumeration.",
+                    "security": [],
+                    "requestBody": json_request_body(schema_ref("PasswordResetRequestPayload"), true),
+                    "responses": {
+                        "202": no_content_response("Reset email enqueued if the account exists."),
+                        "400": error_response("Invalid payload."),
+                        "429": error_response("Too many attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/auth/password-reset/confirm": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "confirmPasswordReset",
+                    "summary": "Complete a password reset with a single-use token",
+                    "description": "Sets the new password and revokes every refresh token the user holds.",
+                    "security": [],
+                    "requestBody": json_request_body(schema_ref("PasswordResetConfirmPayload"), true),
+                    "responses": {
+                        "204": no_content_response("Password was reset."),
+                        "400": error_response("Invalid payload or weak password."),
+                        "401": error_response("Token was invalid or expired."),
+                        "429": error_response("Too many attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/auth/switch-tenant": {
                 "post": {
                     "tags": ["auth"],
@@ -181,6 +248,54 @@ pub fn document() -> Value {
                     "responses": {
                         "200": json_response("Tenant summary counts.", schema_ref("DashboardSummary")),
                         "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/change-password": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "changePassword",
+                    "summary": "Change the current user's password",
+                    "description": "Requires the current password. Revokes all refresh tokens; clients must log in again.",
+                    "requestBody": json_request_body(schema_ref("ChangePasswordPayload"), true),
+                    "responses": {
+                        "204": no_content_response("Password changed."),
+                        "400": error_response("Invalid payload or weak password."),
+                        "401": error_response("Current password was incorrect."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/change-email": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "changeEmail",
+                    "summary": "Change the current user's email address",
+                    "description": "Requires the current password. The new address starts unverified and receives a verification email.",
+                    "requestBody": json_request_body(schema_ref("ChangeEmailPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated user profile.", schema_ref("UserResponse")),
+                        "400": error_response("Invalid payload."),
+                        "401": error_response("Current password was incorrect."),
+                        "409": error_response("Email address is already in use."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/audit": {
+                "get": {
+                    "tags": ["audit"],
+                    "operationId": "listAuditEvents",
+                    "summary": "List tenant audit events (admin only)",
+                    "parameters": [
+                        limit_query_parameter(),
+                        cursor_query_parameter("cursor", "Opaque cursor returned by a previous audit page.")
+                    ],
+                    "responses": {
+                        "200": json_response("Audit events page.", schema_ref("AuditListResponse")),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Admin or owner role is required."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -615,6 +730,30 @@ pub fn document() -> Value {
                         "500": error_response("Unexpected server error.")
                     }
                 }
+            },
+            "/v1/jobs/{job_id}/artifact": {
+                "get": {
+                    "tags": ["jobs"],
+                    "operationId": "downloadJobArtifact",
+                    "summary": "Download the artifact produced by a completed export job",
+                    "description": "Streams the export file (JSON or CSV) with a Content-Disposition attachment header.",
+                    "parameters": [
+                        path_uuid_parameter("job_id", "Job identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Artifact bytes.",
+                            "content": {
+                                "application/json": { "schema": { "type": "string", "format": "binary" } },
+                                "text/csv": { "schema": { "type": "string", "format": "binary" } }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Job or artifact was not found."),
+                        "409": error_response("Job result is not available yet."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
             }
         },
         "components": {
@@ -670,10 +809,11 @@ pub fn document() -> Value {
                 },
                 "UserResponse": {
                     "type": "object",
-                    "required": ["id", "email", "created_at"],
+                    "required": ["id", "email", "email_verified", "created_at"],
                     "properties": {
                         "id": uuid_schema(),
                         "email": string_schema(),
+                        "email_verified": { "type": "boolean" },
                         "created_at": date_time_schema()
                     }
                 },
@@ -791,6 +931,72 @@ pub fn document() -> Value {
                             "type": "string",
                             "description": "Optional access token to revoke alongside the refresh token. When omitted, the Authorization bearer token is used if present."
                         }
+                    }
+                },
+                "VerifyEmailPayload": {
+                    "type": "object",
+                    "required": ["token"],
+                    "properties": {
+                        "token": string_schema()
+                    }
+                },
+                "ResendVerificationPayload": {
+                    "type": "object",
+                    "required": ["email"],
+                    "properties": {
+                        "email": string_schema()
+                    }
+                },
+                "PasswordResetRequestPayload": {
+                    "type": "object",
+                    "required": ["email"],
+                    "properties": {
+                        "email": string_schema()
+                    }
+                },
+                "PasswordResetConfirmPayload": {
+                    "type": "object",
+                    "required": ["token", "new_password"],
+                    "properties": {
+                        "token": string_schema(),
+                        "new_password": string_schema()
+                    }
+                },
+                "ChangePasswordPayload": {
+                    "type": "object",
+                    "required": ["current_password", "new_password"],
+                    "properties": {
+                        "current_password": string_schema(),
+                        "new_password": string_schema()
+                    }
+                },
+                "ChangeEmailPayload": {
+                    "type": "object",
+                    "required": ["current_password", "new_email"],
+                    "properties": {
+                        "current_password": string_schema(),
+                        "new_email": string_schema()
+                    }
+                },
+                "AuditEventResponse": {
+                    "type": "object",
+                    "required": ["id", "actor_user_id", "subject_type", "subject_id", "event_type", "payload", "created_at"],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "actor_user_id": nullable(uuid_schema()),
+                        "subject_type": string_schema(),
+                        "subject_id": nullable(uuid_schema()),
+                        "event_type": string_schema(),
+                        "payload": schema_ref("FreeformObject"),
+                        "created_at": date_time_schema()
+                    }
+                },
+                "AuditListResponse": {
+                    "type": "object",
+                    "required": ["data", "next_cursor"],
+                    "properties": {
+                        "data": array_schema(schema_ref("AuditEventResponse")),
+                        "next_cursor": nullable(string_schema())
                     }
                 },
                 "InvitationCreatePayload": {
@@ -996,7 +1202,8 @@ pub fn document() -> Value {
                         "due_before": date_time_schema(),
                         "due_after": date_time_schema(),
                         "updated_after": date_time_schema(),
-                        "q": string_schema()
+                        "q": string_schema(),
+                        "format": schema_ref("ExportFormat")
                     }
                 },
                 "TaskFilters": {
@@ -1018,7 +1225,23 @@ pub fn document() -> Value {
                     "properties": {
                         "tenant_id": uuid_schema(),
                         "requested_by": uuid_schema(),
-                        "filters": schema_ref("TaskFilters")
+                        "filters": schema_ref("TaskFilters"),
+                        "format": schema_ref("ExportFormat")
+                    }
+                },
+                "ExportFormat": {
+                    "type": "string",
+                    "enum": ["json", "csv"],
+                    "default": "json"
+                },
+                "ExportArtifact": {
+                    "type": "object",
+                    "required": ["key", "content_type", "size_bytes", "download_path"],
+                    "properties": {
+                        "key": string_schema(),
+                        "content_type": string_schema(),
+                        "size_bytes": { "type": "integer", "format": "int64" },
+                        "download_path": string_schema()
                     }
                 },
                 "DueReminderSweepJobPayload": {
@@ -1030,21 +1253,23 @@ pub fn document() -> Value {
                 },
                 "TaskExportJobResult": {
                     "type": "object",
-                    "required": ["requested_by", "generated_at", "task_count", "tasks"],
+                    "required": ["requested_by", "generated_at", "task_count", "format", "artifact"],
                     "properties": {
                         "requested_by": uuid_schema(),
                         "generated_at": date_time_schema(),
                         "task_count": int64_schema(),
-                        "tasks": array_schema(schema_ref("TaskResponse"))
+                        "format": schema_ref("ExportFormat"),
+                        "artifact": schema_ref("ExportArtifact")
                     }
                 },
                 "DueReminderSweepJobResult": {
                     "type": "object",
-                    "required": ["generated_at", "tenant_id", "reminder_count"],
+                    "required": ["generated_at", "tenant_id", "reminder_count", "notification_count"],
                     "properties": {
                         "generated_at": date_time_schema(),
                         "tenant_id": nullable(uuid_schema()),
-                        "reminder_count": int64_schema()
+                        "reminder_count": int64_schema(),
+                        "notification_count": int64_schema()
                     }
                 },
                 "JobResponse": {
