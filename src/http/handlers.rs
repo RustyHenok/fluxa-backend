@@ -290,14 +290,37 @@ pub(super) async fn create_invitation(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(tenant_id): Path<Uuid>,
+    headers: HeaderMap,
     Json(payload): Json<InvitationCreatePayload>,
-) -> AppResult<(StatusCode, Json<InvitationCreateResponse>)> {
+) -> AppResult<(StatusCode, Json<Value>)> {
     ensure_active_tenant(user.tenant_id, tenant_id)?;
     ensure_admin_role(user.role)?;
     let email = normalize_email(&payload.email)?;
     let role = validate_role(payload.role.trim().to_ascii_lowercase().as_str())?;
 
-    let created = membership_service::create_invitation(
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(tenant_id, "invitations:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match membership_service::create_invitation(
         &state,
         tenant_id,
         user.role,
@@ -305,15 +328,31 @@ pub(super) async fn create_invitation(
         &email,
         role,
     )
-    .await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(InvitationCreateResponse {
-            invitation: InvitationResponse::try_from(&created.invitation)?,
-            token: created.token,
-        }),
-    ))
+    .await
+    {
+        Ok(created) => {
+            let body = serde_json::to_value(InvitationCreateResponse {
+                invitation: InvitationResponse::try_from(&created.invitation)?,
+                token: created.token,
+            })
+            .map_err(|error| {
+                AppError::internal(format!("failed to serialize invitation: {error}"))
+            })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
 }
 
 pub(super) async fn list_invitations(
@@ -405,8 +444,9 @@ pub(super) async fn list_projects(
 pub(super) async fn create_project(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
     Json(payload): Json<ProjectPayload>,
-) -> AppResult<(StatusCode, Json<ProjectResponse>)> {
+) -> AppResult<(StatusCode, Json<Value>)> {
     ensure_admin_role(user.role)?;
     let input = CreateProjectInput {
         name: payload.name,
@@ -414,9 +454,48 @@ pub(super) async fn create_project(
     }
     .validate()?;
 
-    let project =
-        project_service::create_project(&state, user.tenant_id, user.user_id, input).await?;
-    Ok((StatusCode::CREATED, Json(ProjectResponse::from(&project))))
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(user.tenant_id, "projects:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match project_service::create_project(&state, user.tenant_id, user.user_id, input).await {
+        Ok(project) => {
+            let body = serde_json::to_value(ProjectResponse::from(&project)).map_err(|error| {
+                AppError::internal(format!("failed to serialize project: {error}"))
+            })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
 }
 
 pub(super) async fn get_project(
@@ -491,8 +570,19 @@ pub(super) async fn delete_project(
     Path(project_id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
     ensure_admin_role(user.role)?;
-    project_service::delete_project(&state, user.tenant_id, user.user_id, project_id).await?;
+    project_service::archive_project(&state, user.tenant_id, user.user_id, project_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn restore_project(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(project_id): Path<Uuid>,
+) -> AppResult<Json<ProjectResponse>> {
+    ensure_admin_role(user.role)?;
+    let project =
+        project_service::restore_project(&state, user.tenant_id, user.user_id, project_id).await?;
+    Ok(Json(ProjectResponse::from(&project)))
 }
 
 pub(super) async fn dashboard_summary(
@@ -657,8 +747,18 @@ pub(super) async fn delete_task(
     Path(task_id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
     ensure_admin_role(user.role)?;
-    task_service::delete_task(&state, user.tenant_id, task_id, user.user_id).await?;
+    task_service::archive_task(&state, user.tenant_id, task_id, user.user_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn restore_task(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+) -> AppResult<Json<TaskResponse>> {
+    ensure_task_write_role(user.role)?;
+    let task = task_service::restore_task(&state, user.tenant_id, task_id, user.user_id).await?;
+    Ok(Json(TaskResponse::try_from(&task)?))
 }
 
 pub(super) async fn create_export(

@@ -80,13 +80,16 @@ pub async fn update_project(
     Ok(project)
 }
 
-pub async fn delete_project(
+pub async fn archive_project(
     state: &AppState,
     tenant_id: Uuid,
     actor_id: Uuid,
     project_id: Uuid,
 ) -> AppResult<()> {
-    state.db.delete_project(tenant_id, project_id).await?;
+    state
+        .db
+        .archive_project(tenant_id, project_id, actor_id)
+        .await?;
     state.cache.bump_tenant_cache_version(tenant_id).await?;
     audit::record_event(
         state,
@@ -94,9 +97,33 @@ pub async fn delete_project(
         Some(actor_id),
         "project",
         Some(project_id),
-        "project.deleted",
+        "project.archived",
         json!({}),
     )
     .await;
     Ok(())
+}
+
+pub async fn restore_project(
+    state: &AppState,
+    tenant_id: Uuid,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> AppResult<ProjectRecord> {
+    let project = state
+        .db
+        .restore_project(tenant_id, project_id, actor_id)
+        .await?;
+    state.cache.bump_tenant_cache_version(tenant_id).await?;
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(actor_id),
+        "project",
+        Some(project_id),
+        "project.restored",
+        json!({ "name": project.name }),
+    )
+    .await;
+    Ok(project)
 }

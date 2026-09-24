@@ -24,7 +24,7 @@ use std::sync::Arc;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -45,7 +45,7 @@ pub async fn run(cli: Cli) -> AppResult<()> {
     let state = AppState::new(config.clone(), db, cache, auth, metrics);
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let mut tasks = Vec::<JoinHandle<AppResult<()>>>::new();
+    let mut tasks = JoinSet::<AppResult<()>>::new();
 
     if matches!(config.mode, ServiceMode::Api | ServiceMode::All) {
         let http_state = state.clone();
@@ -53,34 +53,32 @@ pub async fn run(cli: Cli) -> AppResult<()> {
         let http_rx = shutdown_rx.clone();
         let grpc_rx = shutdown_rx.clone();
 
-        tasks.push(tokio::spawn(async move {
-            http::serve(http_state, http_rx).await
-        }));
-        tasks.push(tokio::spawn(async move {
-            grpc::serve(grpc_state, grpc_rx).await
-        }));
+        tasks.spawn(async move { http::serve(http_state, http_rx).await });
+        tasks.spawn(async move { grpc::serve(grpc_state, grpc_rx).await });
     }
 
     if matches!(config.mode, ServiceMode::Worker | ServiceMode::All) {
         let worker_state = state.clone();
         let worker_rx = shutdown_rx.clone();
-        tasks.push(tokio::spawn(async move {
-            jobs::run_worker(worker_state, worker_rx).await
-        }));
+        tasks.spawn(async move { jobs::run_worker(worker_state, worker_rx).await });
     }
 
     let sampler_state = state.clone();
     let sampler_rx = shutdown_rx.clone();
-    tasks.push(tokio::spawn(async move {
-        sampler::run_sampler(sampler_state, sampler_rx).await
-    }));
+    tasks.spawn(async move { sampler::run_sampler(sampler_state, sampler_rx).await });
 
     tokio::select! {
-        result = wait_for_first_task(&mut tasks) => {
+        joined = tasks.join_next() => {
             if let Err(error) = shutdown_tx.send(true) {
                 tracing::warn!("failed to notify shutdown: {error}");
             }
-            result?;
+            match joined {
+                Some(Ok(result)) => result?,
+                Some(Err(error)) => {
+                    return Err(AppError::internal(format!("task join error: {error}")));
+                }
+                None => {}
+            }
         }
         signal = tokio::signal::ctrl_c() => {
             signal.map_err(AppError::from)?;
@@ -91,8 +89,8 @@ pub async fn run(cli: Cli) -> AppResult<()> {
         }
     }
 
-    for task in tasks {
-        match task.await {
+    while let Some(joined) = tasks.join_next().await {
+        match joined {
             Ok(Ok(())) => {}
             Ok(Err(error)) => return Err(error),
             Err(error) if error.is_cancelled() => {}
@@ -101,25 +99,6 @@ pub async fn run(cli: Cli) -> AppResult<()> {
     }
 
     Ok(())
-}
-
-async fn wait_for_first_task(tasks: &mut [JoinHandle<AppResult<()>>]) -> AppResult<()> {
-    if tasks.is_empty() {
-        return Ok(());
-    }
-
-    loop {
-        for task in tasks.iter_mut() {
-            if task.is_finished() {
-                return match task.await {
-                    Ok(result) => result,
-                    Err(error) => Err(AppError::internal(format!("task join error: {error}"))),
-                };
-            }
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    }
 }
 
 fn init_tracing() {

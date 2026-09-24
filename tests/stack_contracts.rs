@@ -538,6 +538,10 @@ async fn member_management_enforces_role_rules() {
             server.http_base, owner.tenant_id
         ))
         .bearer_auth(&owner.access_token)
+        .header(
+            "Idempotency-Key",
+            format!("invite-{}", uuid::Uuid::new_v4()),
+        )
         .json(&json!({ "email": invitee.email, "role": "member" }))
         .send()
         .await
@@ -560,6 +564,10 @@ async fn member_management_enforces_role_rules() {
             server.http_base, owner.tenant_id
         ))
         .bearer_auth(&owner.access_token)
+        .header(
+            "Idempotency-Key",
+            format!("invite-{}", uuid::Uuid::new_v4()),
+        )
         .json(&json!({ "email": invitee.email, "role": "member" }))
         .send()
         .await
@@ -1275,6 +1283,218 @@ async fn retention_sweep_purges_old_rows_and_metrics_expose_route_series() {
     assert!(
         body.contains("retention_rows_purged_total{"),
         "metrics should count purged retention rows"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn soft_delete_restore_idempotency_and_search() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "soft-delete").await;
+
+    // Idempotent project creation: same key replays the original response.
+    let project_key = format!("project-{}", uuid::Uuid::new_v4());
+    let mut project_ids = Vec::new();
+    for _ in 0..2 {
+        let response = client
+            .post(format!("{}/v1/projects", server.http_base))
+            .bearer_auth(&owner.access_token)
+            .header("Idempotency-Key", &project_key)
+            .json(&json!({ "name": "Replay project", "description": "idempotency" }))
+            .send()
+            .await
+            .expect("project create should return a response");
+        assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+        let body: Value = response.json().await.expect("project should be json");
+        project_ids.push(body["id"].as_str().expect("project id").to_string());
+    }
+    assert_eq!(
+        project_ids[0], project_ids[1],
+        "same idempotency key should replay the same project"
+    );
+
+    let missing_key = client
+        .post(format!("{}/v1/projects", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "name": "No key" }))
+        .send()
+        .await
+        .expect("missing key request should return a response");
+    assert_eq!(missing_key.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Task soft delete and restore.
+    let project = create_project(&client, &server.http_base, &owner.access_token, "Live").await;
+    let project_id = project["id"].as_str().expect("project id").to_string();
+    let task = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        Some(&project_id),
+        "Quarterly Budget Review",
+        "open",
+        "high",
+    )
+    .await;
+    let task_id = task["id"].as_str().expect("task id").to_string();
+
+    let archived = client
+        .delete(format!("{}/v1/tasks/{}", server.http_base, task_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task delete should return a response");
+    assert_eq!(archived.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let fetched = client
+        .get(format!("{}/v1/tasks/{}", server.http_base, task_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("archived task fetch should return a response");
+    assert_eq!(fetched.status(), reqwest::StatusCode::OK);
+    let fetched: Value = fetched.json().await.expect("task should be json");
+    assert_eq!(fetched["status"], "archived", "delete should archive");
+
+    let restored = client
+        .post(format!("{}/v1/tasks/{}/restore", server.http_base, task_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task restore should return a response");
+    assert_eq!(restored.status(), reqwest::StatusCode::OK);
+    let restored: Value = restored.json().await.expect("restore should be json");
+    assert_eq!(restored["status"], "open", "restore should reopen the task");
+
+    let restore_again = client
+        .post(format!("{}/v1/tasks/{}/restore", server.http_base, task_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("second restore should return a response");
+    assert_eq!(restore_again.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // Full-text search plus short-term substring fallback.
+    create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        Some(&project_id),
+        "Standup notes",
+        "open",
+        "low",
+    )
+    .await;
+
+    let fts = client
+        .get(format!("{}/v1/tasks?q=budget", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("search should return a response");
+    assert_eq!(fts.status(), reqwest::StatusCode::OK);
+    let fts: Value = fts.json().await.expect("search should be json");
+    let titles: Vec<&str> = fts["data"]
+        .as_array()
+        .expect("search data should be an array")
+        .iter()
+        .filter_map(|task| task["title"].as_str())
+        .collect();
+    assert!(
+        titles.contains(&"Quarterly Budget Review") && !titles.contains(&"Standup notes"),
+        "full-text search should match whole words only, got {titles:?}"
+    );
+
+    let short = client
+        .get(format!("{}/v1/tasks?q=Bu", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("short search should return a response");
+    let short: Value = short.json().await.expect("short search should be json");
+    assert!(
+        short["data"]
+            .as_array()
+            .expect("short search data should be an array")
+            .iter()
+            .any(|task| task["title"] == "Quarterly Budget Review"),
+        "short terms should substring-match"
+    );
+
+    // Project soft delete hides the project and its tasks until restore.
+    let hidden_project =
+        create_project(&client, &server.http_base, &owner.access_token, "Hidden").await;
+    let hidden_id = hidden_project["id"].as_str().expect("project id");
+    let hidden_task = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        Some(hidden_id),
+        "Invisible work item",
+        "open",
+        "medium",
+    )
+    .await;
+    let hidden_task_id = hidden_task["id"].as_str().expect("task id");
+
+    let archive_project = client
+        .delete(format!("{}/v1/projects/{}", server.http_base, hidden_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("project delete should return a response");
+    assert_eq!(archive_project.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let project_gone = client
+        .get(format!("{}/v1/projects/{}", server.http_base, hidden_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("archived project fetch should return a response");
+    assert_eq!(project_gone.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let listing = client
+        .get(format!("{}/v1/tasks?limit=100", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task listing should return a response");
+    let listing: Value = listing.json().await.expect("listing should be json");
+    assert!(
+        !listing["data"]
+            .as_array()
+            .expect("listing data should be an array")
+            .iter()
+            .any(|task| task["id"] == hidden_task_id),
+        "tasks of archived projects should be hidden from listings"
+    );
+
+    let restore_project = client
+        .post(format!(
+            "{}/v1/projects/{}/restore",
+            server.http_base, hidden_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("project restore should return a response");
+    assert_eq!(restore_project.status(), reqwest::StatusCode::OK);
+
+    let listing = client
+        .get(format!("{}/v1/tasks?limit=100", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task listing after restore should return a response");
+    let listing: Value = listing.json().await.expect("listing should be json");
+    assert!(
+        listing["data"]
+            .as_array()
+            .expect("listing data should be an array")
+            .iter()
+            .any(|task| task["id"] == hidden_task_id),
+        "restoring the project should make its tasks visible again"
     );
 }
 

@@ -147,15 +147,26 @@ pub async fn update_task(
     Ok(task)
 }
 
-pub async fn delete_task(
+pub async fn archive_task(
     state: &AppState,
     tenant_id: Uuid,
     task_id: Uuid,
     actor_id: Uuid,
 ) -> AppResult<()> {
-    state.db.delete_task(tenant_id, task_id, actor_id).await?;
+    state.db.archive_task(tenant_id, task_id, actor_id).await?;
     state.cache.bump_tenant_cache_version(tenant_id).await?;
     Ok(())
+}
+
+pub async fn restore_task(
+    state: &AppState,
+    tenant_id: Uuid,
+    task_id: Uuid,
+    actor_id: Uuid,
+) -> AppResult<TaskRecord> {
+    let task = state.db.restore_task(tenant_id, task_id, actor_id).await?;
+    state.cache.bump_tenant_cache_version(tenant_id).await?;
+    Ok(task)
 }
 
 pub async fn export_tasks(

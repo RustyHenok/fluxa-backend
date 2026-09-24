@@ -95,12 +95,22 @@ TENANTS_JSON="$(curl -sS "$BASE/v1/me/tenants" -H "Authorization: Bearer $ACCESS
 [[ "$(jq -r '.[0].tenant_id' <<<"$TENANTS_JSON")" == "$TENANT_ID" ]] || fail "/v1/me/tenants returned unexpected tenant"
 
 step "Create project"
+PROJECT_KEY="smoke-project-$(date +%s)-$RANDOM"
 PROJECT_JSON="$(
   curl -sS -X POST "$BASE/v1/projects" \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: $PROJECT_KEY" \
     -H 'content-type: application/json' \
     -d '{"name":"Smoke Project","description":"verify project hierarchy"}'
 )"
+PROJECT_REPLAY_JSON="$(
+  curl -sS -X POST "$BASE/v1/projects" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: $PROJECT_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"name":"Smoke Project","description":"verify project hierarchy"}'
+)"
+[[ "$(jq -er '.id' <<<"$PROJECT_REPLAY_JSON")" == "$(jq -er '.id' <<<"$PROJECT_JSON")" ]] || fail "project creation replay returned a different project"
 PROJECT_ID="$(jq -er '.id' <<<"$PROJECT_JSON")"
 
 PROJECT_FETCH_JSON="$(curl -sS "$BASE/v1/projects/$PROJECT_ID" -H "Authorization: Bearer $ACCESS_TOKEN")"

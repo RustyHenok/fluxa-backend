@@ -110,6 +110,10 @@ fn router(state: AppState) -> AppResult<Router> {
                 .delete(handlers::delete_project),
         )
         .route(
+            "/projects/:project_id/restore",
+            post(handlers::restore_project),
+        )
+        .route(
             "/projects/:project_id/summary",
             get(handlers::get_project_summary),
         )
@@ -127,6 +131,7 @@ fn router(state: AppState) -> AppResult<Router> {
                 .patch(handlers::update_task)
                 .delete(handlers::delete_task),
         )
+        .route("/tasks/:task_id/restore", post(handlers::restore_task))
         .route("/tasks/:task_id/audit", get(handlers::list_task_audit))
         .route("/exports/tasks", post(handlers::create_export))
         .route("/jobs/:job_id", get(handlers::get_job))

@@ -217,6 +217,7 @@ pub async fn create_project(client: &Client, base: &str, access_token: &str, nam
     let response = client
         .post(format!("{base}/v1/projects"))
         .bearer_auth(access_token)
+        .header("Idempotency-Key", format!("project-{}", Uuid::new_v4()))
         .json(&json!({
             "name": name,
             "description": "integration coverage",

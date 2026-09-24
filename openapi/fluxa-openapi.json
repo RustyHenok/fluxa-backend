@@ -2571,6 +2571,17 @@
       },
       "post": {
         "operationId": "createProject",
+        "parameters": [
+          {
+            "description": "Client-supplied idempotency key used to safely replay create requests.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2651,6 +2662,7 @@
     },
     "/v1/projects/{project_id}": {
       "delete": {
+        "description": "Archives the project. Archived projects disappear from listings and their tasks are hidden until the project is restored.",
         "operationId": "deleteProject",
         "parameters": [
           {
@@ -2666,7 +2678,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Project deleted."
+            "description": "Project archived."
           },
           "401": {
             "content": {
@@ -2709,7 +2721,7 @@
             "description": "Unexpected server error."
           }
         },
-        "summary": "Delete a project",
+        "summary": "Archive a project (soft delete)",
         "tags": [
           "projects"
         ]
@@ -2862,6 +2874,79 @@
           }
         },
         "summary": "Update a project",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/restore": {
+      "post": {
+        "operationId": "restoreProject",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            },
+            "description": "Restored project detail."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The active role cannot restore projects."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No archived project with this identifier."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Restore an archived project",
         "tags": [
           "projects"
         ]
@@ -3024,7 +3109,7 @@
             }
           },
           {
-            "description": "Full-text search term applied to the task title and description.",
+            "description": "Search term applied to the task title and description. Terms of three or more characters use full-text (web search) matching on whole words; shorter terms fall back to substring matching.",
             "in": "query",
             "name": "q",
             "required": false,
@@ -3185,7 +3270,7 @@
             }
           },
           {
-            "description": "Full-text search term applied to the task title and description.",
+            "description": "Search term applied to the task title and description. Terms of three or more characters use full-text (web search) matching on whole words; shorter terms fall back to substring matching.",
             "in": "query",
             "name": "q",
             "required": false,
@@ -3334,6 +3419,7 @@
     },
     "/v1/tasks/{task_id}": {
       "delete": {
+        "description": "Sets the task status to archived. Archived tasks remain readable by id and can be restored.",
         "operationId": "deleteTask",
         "parameters": [
           {
@@ -3349,7 +3435,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Task deleted."
+            "description": "Task archived."
           },
           "401": {
             "content": {
@@ -3392,7 +3478,7 @@
             "description": "Unexpected server error."
           }
         },
-        "summary": "Delete a task",
+        "summary": "Archive a task (soft delete)",
         "tags": [
           "tasks"
         ]
@@ -3644,6 +3730,80 @@
         ]
       }
     },
+    "/v1/tasks/{task_id}/restore": {
+      "post": {
+        "description": "Returns an archived task to open status.",
+        "operationId": "restoreTask",
+        "parameters": [
+          {
+            "description": "Task identifier.",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskResponse"
+                }
+              }
+            },
+            "description": "Restored task detail."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The active role cannot restore tasks."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No archived task with this identifier."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Restore an archived task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/v1/tenants/{tenant_id}/invitations": {
       "get": {
         "description": "Requires owner or admin role.",
@@ -3731,6 +3891,15 @@
             "required": true,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Client-supplied idempotency key used to safely replay create requests.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
               "type": "string"
             }
           }

@@ -332,7 +332,7 @@ impl Database {
         Ok(task)
     }
 
-    pub async fn delete_task(
+    pub async fn archive_task(
         &self,
         tenant_id: Uuid,
         task_id: Uuid,
@@ -341,14 +341,17 @@ impl Database {
         let mut tx = self.pool.begin().await?;
         let task = sqlx::query_as::<_, TaskRecord>(
             r#"
-            DELETE FROM tasks
-            WHERE tenant_id = $1 AND id = $2
+            UPDATE tasks
+            SET status = 'archived', updated_by = $3, updated_at = $4
+            WHERE tenant_id = $1 AND id = $2 AND status <> 'archived'
             RETURNING id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
                       created_by, updated_by, created_at, updated_at
             "#,
         )
         .bind(tenant_id)
         .bind(task_id)
+        .bind(actor_id)
+        .bind(Utc::now())
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| AppError::NotFound("task not found".into()))?;
@@ -356,7 +359,55 @@ impl Database {
         sqlx::query(
             r#"
             INSERT INTO task_audit_log (id, task_id, tenant_id, actor_user_id, event_type, payload, created_at)
-            VALUES ($1, $2, $3, $4, 'task_deleted', $5, $6)
+            VALUES ($1, $2, $3, $4, 'task_archived', $5, $6)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(task.id)
+        .bind(task.tenant_id)
+        .bind(actor_id)
+        .bind(json!({
+            "project_id": task.project_id,
+            "title": task.title,
+            "status": task.status,
+            "priority": task.priority,
+        }))
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(task)
+    }
+
+    pub async fn restore_task(
+        &self,
+        tenant_id: Uuid,
+        task_id: Uuid,
+        actor_id: Uuid,
+    ) -> AppResult<TaskRecord> {
+        let mut tx = self.pool.begin().await?;
+        let task = sqlx::query_as::<_, TaskRecord>(
+            r#"
+            UPDATE tasks
+            SET status = 'open', updated_by = $3, updated_at = $4
+            WHERE tenant_id = $1 AND id = $2 AND status = 'archived'
+            RETURNING id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
+                      created_by, updated_by, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(task_id)
+        .bind(actor_id)
+        .bind(Utc::now())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound("archived task not found".into()))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO task_audit_log (id, task_id, tenant_id, actor_user_id, event_type, payload, created_at)
+            VALUES ($1, $2, $3, $4, 'task_restored', $5, $6)
             "#,
         )
         .bind(Uuid::new_v4())
@@ -542,13 +593,24 @@ fn apply_task_filters<'a>(
     }
 
     if let Some(query) = filters.q.as_ref() {
-        let like = format!("%{}%", query.trim());
-        builder.push(" AND (title ILIKE ");
-        builder.push_bind(like.clone());
-        builder.push(" OR COALESCE(description, '') ILIKE ");
-        builder.push_bind(like);
-        builder.push(")");
+        let trimmed = query.trim();
+        if trimmed.chars().count() >= 3 {
+            builder.push(" AND search_tsv @@ websearch_to_tsquery('simple', ");
+            builder.push_bind(trimmed.to_string());
+            builder.push(")");
+        } else {
+            let like = format!("%{trimmed}%");
+            builder.push(" AND (title ILIKE ");
+            builder.push_bind(like.clone());
+            builder.push(" OR COALESCE(description, '') ILIKE ");
+            builder.push_bind(like);
+            builder.push(")");
+        }
     }
+
+    builder.push(
+        " AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = tasks.project_id AND p.archived_at IS NOT NULL)",
+    );
 
     if let Some(cursor) = cursor {
         builder.push(" AND (updated_at < ");

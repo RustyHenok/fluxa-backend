@@ -28,7 +28,7 @@ impl Database {
                 updated_at
             )
             VALUES ($1, $2, $3, $4, $5, $5, $6, $6)
-            RETURNING id, tenant_id, name, description, created_by, updated_by, created_at, updated_at
+            RETURNING id, tenant_id, name, description, created_by, updated_by, created_at, updated_at, archived_at
             "#,
         )
         .bind(Uuid::new_v4())
@@ -45,9 +45,9 @@ impl Database {
     pub async fn list_projects(&self, tenant_id: Uuid) -> AppResult<Vec<ProjectRecord>> {
         sqlx::query_as::<_, ProjectRecord>(
             r#"
-            SELECT id, tenant_id, name, description, created_by, updated_by, created_at, updated_at
+            SELECT id, tenant_id, name, description, created_by, updated_by, created_at, updated_at, archived_at
             FROM projects
-            WHERE tenant_id = $1
+            WHERE tenant_id = $1 AND archived_at IS NULL
             ORDER BY updated_at DESC, id DESC
             "#,
         )
@@ -64,9 +64,9 @@ impl Database {
     ) -> AppResult<Option<ProjectRecord>> {
         sqlx::query_as::<_, ProjectRecord>(
             r#"
-            SELECT id, tenant_id, name, description, created_by, updated_by, created_at, updated_at
+            SELECT id, tenant_id, name, description, created_by, updated_by, created_at, updated_at, archived_at
             FROM projects
-            WHERE tenant_id = $1 AND id = $2
+            WHERE tenant_id = $1 AND id = $2 AND archived_at IS NULL
             "#,
         )
         .bind(tenant_id)
@@ -108,7 +108,7 @@ impl Database {
             LEFT JOIN tasks t
                 ON t.project_id = p.id
                AND t.tenant_id = p.tenant_id
-            WHERE p.tenant_id = $1 AND p.id = $2
+            WHERE p.tenant_id = $1 AND p.id = $2 AND p.archived_at IS NULL
             GROUP BY p.id, p.name
             "#,
         )
@@ -148,8 +148,9 @@ impl Database {
         builder.push_bind(tenant_id);
         builder.push(" AND id = ");
         builder.push_bind(project_id);
+        builder.push(" AND archived_at IS NULL");
         builder.push(
-            " RETURNING id, tenant_id, name, description, created_by, updated_by, created_at, updated_at",
+            " RETURNING id, tenant_id, name, description, created_by, updated_by, created_at, updated_at, archived_at",
         );
 
         builder
@@ -159,23 +160,50 @@ impl Database {
             .ok_or_else(|| AppError::NotFound("project not found".into()))
     }
 
-    pub async fn delete_project(
+    pub async fn archive_project(
         &self,
         tenant_id: Uuid,
         project_id: Uuid,
+        actor_id: Uuid,
     ) -> AppResult<ProjectRecord> {
         sqlx::query_as::<_, ProjectRecord>(
             r#"
-            DELETE FROM projects
-            WHERE tenant_id = $1 AND id = $2
-            RETURNING id, tenant_id, name, description, created_by, updated_by, created_at, updated_at
+            UPDATE projects
+            SET archived_at = $3, updated_by = $4, updated_at = $3
+            WHERE tenant_id = $1 AND id = $2 AND archived_at IS NULL
+            RETURNING id, tenant_id, name, description, created_by, updated_by, created_at, updated_at, archived_at
             "#,
         )
         .bind(tenant_id)
         .bind(project_id)
+        .bind(Utc::now())
+        .bind(actor_id)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| AppError::NotFound("project not found".into()))
+    }
+
+    pub async fn restore_project(
+        &self,
+        tenant_id: Uuid,
+        project_id: Uuid,
+        actor_id: Uuid,
+    ) -> AppResult<ProjectRecord> {
+        sqlx::query_as::<_, ProjectRecord>(
+            r#"
+            UPDATE projects
+            SET archived_at = NULL, updated_by = $4, updated_at = $3
+            WHERE tenant_id = $1 AND id = $2 AND archived_at IS NOT NULL
+            RETURNING id, tenant_id, name, description, created_by, updated_by, created_at, updated_at, archived_at
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(project_id)
+        .bind(Utc::now())
+        .bind(actor_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("archived project not found".into()))
     }
 }
 

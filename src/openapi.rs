@@ -393,7 +393,8 @@ pub fn document() -> Value {
                     "summary": "Invite a user to the active tenant",
                     "description": "Requires owner or admin role; inviting an admin requires the owner role. The response includes the single-use invitation token exactly once. Until email delivery lands, the inviter distributes this token out of band (interim behavior).",
                     "parameters": [
-                        path_uuid_parameter("tenant_id", "Tenant identifier.")
+                        path_uuid_parameter("tenant_id", "Tenant identifier."),
+                        idempotency_header_parameter()
                     ],
                     "requestBody": json_request_body(schema_ref("InvitationCreatePayload"), true),
                     "responses": {
@@ -469,6 +470,9 @@ pub fn document() -> Value {
                     "tags": ["projects"],
                     "operationId": "createProject",
                     "summary": "Create a project",
+                    "parameters": [
+                        idempotency_header_parameter()
+                    ],
                     "requestBody": json_request_body(schema_ref("ProjectPayload"), true),
                     "responses": {
                         "201": json_response("Project created.", schema_ref("ProjectResponse")),
@@ -515,15 +519,33 @@ pub fn document() -> Value {
                 "delete": {
                     "tags": ["projects"],
                     "operationId": "deleteProject",
-                    "summary": "Delete a project",
+                    "summary": "Archive a project (soft delete)",
+                    "description": "Archives the project. Archived projects disappear from listings and their tasks are hidden until the project is restored.",
                     "parameters": [
                         path_uuid_parameter("project_id", "Project identifier.")
                     ],
                     "responses": {
-                        "204": no_content_response("Project deleted."),
+                        "204": no_content_response("Project archived."),
                         "401": error_response("Authentication is required."),
                         "403": error_response("The active role cannot delete projects."),
                         "404": error_response("Project was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/projects/{project_id}/restore": {
+                "post": {
+                    "tags": ["projects"],
+                    "operationId": "restoreProject",
+                    "summary": "Restore an archived project",
+                    "parameters": [
+                        path_uuid_parameter("project_id", "Project identifier.")
+                    ],
+                    "responses": {
+                        "200": json_response("Restored project detail.", schema_ref("ProjectResponse")),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot restore projects."),
+                        "404": error_response("No archived project with this identifier."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -559,7 +581,7 @@ pub fn document() -> Value {
                         query_parameter("due_before", false, "Return tasks due before this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("due_after", false, "Return tasks due after this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("updated_after", false, "Return tasks updated after this RFC3339 timestamp.", date_time_schema()),
-                        query_parameter("q", false, "Full-text search term applied to the task title and description.", string_schema())
+                        query_parameter("q", false, "Search term applied to the task title and description. Terms of three or more characters use full-text (web search) matching on whole words; shorter terms fall back to substring matching.", string_schema())
                     ],
                     "responses": {
                         "200": json_response("Paginated project task list.", schema_ref("TaskListResponse")),
@@ -585,7 +607,7 @@ pub fn document() -> Value {
                         query_parameter("due_before", false, "Return tasks due before this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("due_after", false, "Return tasks due after this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("updated_after", false, "Return tasks updated after this RFC3339 timestamp.", date_time_schema()),
-                        query_parameter("q", false, "Full-text search term applied to the task title and description.", string_schema())
+                        query_parameter("q", false, "Search term applied to the task title and description. Terms of three or more characters use full-text (web search) matching on whole words; shorter terms fall back to substring matching.", string_schema())
                     ],
                     "responses": {
                         "200": json_response("Paginated task list.", schema_ref("TaskListResponse")),
@@ -647,15 +669,34 @@ pub fn document() -> Value {
                 "delete": {
                     "tags": ["tasks"],
                     "operationId": "deleteTask",
-                    "summary": "Delete a task",
+                    "summary": "Archive a task (soft delete)",
+                    "description": "Sets the task status to archived. Archived tasks remain readable by id and can be restored.",
                     "parameters": [
                         path_uuid_parameter("task_id", "Task identifier.")
                     ],
                     "responses": {
-                        "204": no_content_response("Task deleted."),
+                        "204": no_content_response("Task archived."),
                         "401": error_response("Authentication is required."),
                         "403": error_response("The active role cannot delete tasks."),
                         "404": error_response("Task was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/restore": {
+                "post": {
+                    "tags": ["tasks"],
+                    "operationId": "restoreTask",
+                    "summary": "Restore an archived task",
+                    "description": "Returns an archived task to open status.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier.")
+                    ],
+                    "responses": {
+                        "200": json_response("Restored task detail.", schema_ref("TaskResponse")),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot restore tasks."),
+                        "404": error_response("No archived task with this identifier."),
                         "500": error_response("Unexpected server error.")
                     }
                 }

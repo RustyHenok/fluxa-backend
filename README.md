@@ -12,6 +12,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - Background workers for task exports, due reminder sweeps, and outbox-based notification delivery (pluggable noop/log/SMTP mailer)
 - Export artifacts in JSON or CSV stored via a storage abstraction (local filesystem by default) with an authenticated download endpoint
 - Unified tenant audit log covering auth, membership, project, and account events
+- Soft delete with restore endpoints for projects and tasks, and full-text task search with substring fallback for short terms
 
 ## Main endpoints
 
@@ -43,6 +44,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - `GET /v1/projects/:project_id/summary`
 - `PATCH /v1/projects/:project_id`
 - `DELETE /v1/projects/:project_id`
+- `POST /v1/projects/:project_id/restore`
 - `GET /v1/projects/:project_id/tasks`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
@@ -50,6 +52,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - `GET /v1/tasks/:task_id/audit`
 - `PATCH /v1/tasks/:task_id`
 - `DELETE /v1/tasks/:task_id`
+- `POST /v1/tasks/:task_id/restore`
 - `POST /v1/exports/tasks`
 - `GET /v1/jobs/:job_id`
 - `GET /v1/jobs/:job_id/result`

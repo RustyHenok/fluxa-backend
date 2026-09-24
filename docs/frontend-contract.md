@@ -142,6 +142,8 @@ The following create endpoints require `Idempotency-Key`:
 
 - `POST /v1/tasks`
 - `POST /v1/exports/tasks`
+- `POST /v1/projects`
+- `POST /v1/tenants/:tenant_id/invitations`
 
 Client expectation:
 
@@ -190,14 +192,29 @@ Client expectation:
 - `GET /v1/projects/:project_id`
 - `GET /v1/projects/:project_id/summary`
 - `PATCH /v1/projects/:project_id`
-- `DELETE /v1/projects/:project_id`
+- `DELETE /v1/projects/:project_id` (soft delete: archives the project)
+- `POST /v1/projects/:project_id/restore`
 - `GET /v1/projects/:project_id/tasks`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
 - `GET /v1/tasks/:task_id`
 - `PATCH /v1/tasks/:task_id`
-- `DELETE /v1/tasks/:task_id`
+- `DELETE /v1/tasks/:task_id` (soft delete: sets status to `archived`)
+- `POST /v1/tasks/:task_id/restore`
 - `GET /v1/tasks/:task_id/audit`
+
+### Soft Delete Semantics
+
+- `DELETE /v1/tasks/:task_id` archives the task (status `archived`) instead of removing the row; the task stays readable via `GET /v1/tasks/:task_id` and appears in listings when filtering `status=archived`
+- `POST /v1/tasks/:task_id/restore` returns an archived task to `open`; it responds `404` when the task is not archived
+- `DELETE /v1/projects/:project_id` archives the project: it disappears from `GET /v1/projects`, direct fetches return `404`, and its tasks are hidden from task listings and exports until the project is restored
+- `POST /v1/projects/:project_id/restore` un-archives the project and responds `404` when no archived project matches
+- hard purges are handled by backend retention jobs, not by the API
+
+### Task Search
+
+- the `q` filter on task listings uses full-text (web search) matching over title and description for terms of three or more characters — whole words, `"quoted phrases"`, and `-negation` work; matching is on complete words, not substrings
+- terms shorter than three characters fall back to case-insensitive substring matching
 
 ### Jobs / Exports
 
