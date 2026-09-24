@@ -234,6 +234,7 @@ MEMBER_ACCESS_TOKEN="$(jq -er '.access_token' <<<"$MEMBER_REGISTER_JSON")"
 INVITE_JSON="$(
   curl -sS -X POST "$BASE/v1/tenants/$TENANT_ID/invitations" \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: smoke-invite-$(date +%s)-$RANDOM" \
     -H 'content-type: application/json' \
     -d "{\"email\":\"$MEMBER_EMAIL\",\"role\":\"member\"}"
 )"
