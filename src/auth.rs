@@ -184,6 +184,13 @@ mod tests {
                 reminder_due_soon_hours: 24,
                 reminder_dedupe_ttl_hours: 24,
                 artifact_storage_dir: "data/exports".into(),
+                retention_sweep_interval_hours: 24,
+                refresh_token_retention_days: 30,
+                job_retention_days: 30,
+                notification_retention_days: 30,
+                audit_retention_days: 365,
+                sampler_interval_ms: 10_000,
+                metrics_auth_token: None,
             }
             .validate()
             .unwrap(),

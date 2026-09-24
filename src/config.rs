@@ -94,6 +94,20 @@ pub struct Cli {
     pub reminder_dedupe_ttl_hours: i64,
     #[arg(long, env = "ARTIFACT_STORAGE_DIR", default_value = "data/exports")]
     pub artifact_storage_dir: String,
+    #[arg(long, env = "RETENTION_SWEEP_INTERVAL_HOURS", default_value_t = 24)]
+    pub retention_sweep_interval_hours: i64,
+    #[arg(long, env = "REFRESH_TOKEN_RETENTION_DAYS", default_value_t = 30)]
+    pub refresh_token_retention_days: i64,
+    #[arg(long, env = "JOB_RETENTION_DAYS", default_value_t = 30)]
+    pub job_retention_days: i64,
+    #[arg(long, env = "NOTIFICATION_RETENTION_DAYS", default_value_t = 30)]
+    pub notification_retention_days: i64,
+    #[arg(long, env = "AUDIT_RETENTION_DAYS", default_value_t = 365)]
+    pub audit_retention_days: i64,
+    #[arg(long, env = "SAMPLER_INTERVAL_MS", default_value_t = 10_000)]
+    pub sampler_interval_ms: u64,
+    #[arg(long, env = "METRICS_AUTH_TOKEN")]
+    pub metrics_auth_token: Option<String>,
 }
 
 impl Cli {
@@ -203,7 +217,57 @@ impl Cli {
             ));
         }
 
+        if self.retention_sweep_interval_hours <= 0
+            || self.refresh_token_retention_days <= 0
+            || self.job_retention_days <= 0
+            || self.notification_retention_days <= 0
+            || self.audit_retention_days <= 0
+        {
+            return Err(AppError::Validation(
+                "retention windows must be positive".into(),
+            ));
+        }
+
+        if self.sampler_interval_ms == 0 {
+            return Err(AppError::Validation(
+                "SAMPLER_INTERVAL_MS must be positive".into(),
+            ));
+        }
+
+        if let Some(token) = self.metrics_auth_token.as_deref()
+            && token.trim().is_empty()
+        {
+            return Err(AppError::Validation(
+                "METRICS_AUTH_TOKEN must not be empty when set".into(),
+            ));
+        }
+
+        self.warn_on_insecure_defaults();
+
         Ok(self)
+    }
+
+    /// Emits startup warnings when development-only defaults are detected so
+    /// they are not silently carried into production deployments.
+    fn warn_on_insecure_defaults(&self) {
+        const DEV_JWT_SECRET: &str = "local-development-secret-local-development";
+        const DEV_GRPC_TOKEN: &str = "local-development-grpc-token-local-development";
+
+        if self.cors_allow_origin.trim() == "*" {
+            tracing::warn!(
+                "CORS_ALLOW_ORIGIN is '*'; restrict it to explicit origins outside local development"
+            );
+        }
+        if self.jwt_secret == DEV_JWT_SECRET {
+            tracing::warn!(
+                "JWT_SECRET matches the docker-compose development default; set a unique secret outside local development"
+            );
+        }
+        if self.grpc_auth_token == DEV_GRPC_TOKEN {
+            tracing::warn!(
+                "GRPC_AUTH_TOKEN matches the docker-compose development default; set a unique token outside local development"
+            );
+        }
     }
 
     pub fn access_token_ttl(&self) -> Duration {
@@ -256,6 +320,10 @@ impl Cli {
 
     pub fn reminder_due_soon_window(&self) -> Duration {
         Duration::from_secs((self.reminder_due_soon_hours * 60 * 60) as u64)
+    }
+
+    pub fn sampler_interval(&self) -> Duration {
+        Duration::from_millis(self.sampler_interval_ms)
     }
 }
 

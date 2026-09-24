@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fluxa-api
+  labels:
+    app.kubernetes.io/name: fluxa-backend
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fluxa-backend
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fluxa-backend
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: api
+          image: fluxa-backend:latest # replace with your registry image
+          args: ["--mode", "api"]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 50051
+          env:
+            - name: APP_MODE
+              value: api
+            - name: HTTP_ADDR
+              value: 0.0.0.0:8080
+            - name: GRPC_ADDR
+              value: 0.0.0.0:50051
+            - name: CORS_ALLOW_ORIGIN
+              value: https://app.example.com
+            - name: ARTIFACT_STORAGE_DIR
+              value: /var/lib/fluxa/exports
+          envFrom:
+            - secretRef:
+                name: fluxa-backend
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: exports
+              mountPath: /var/lib/fluxa/exports
+      volumes:
+        - name: exports
+          persistentVolumeClaim:
+            claimName: fluxa-exports
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fluxa-api
+  labels:
+    app.kubernetes.io/name: fluxa-backend
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    app.kubernetes.io/name: fluxa-backend
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Internal-only Service for the gRPC admin surface; do not expose via Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fluxa-grpc
+  labels:
+    app.kubernetes.io/name: fluxa-backend
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    app.kubernetes.io/name: fluxa-backend
+    app.kubernetes.io/component: api
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc

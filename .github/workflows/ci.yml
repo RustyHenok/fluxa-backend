@@ -50,6 +50,19 @@ jobs:
       - name: Start local stack
         run: docker compose up --build -d
 
+      - name: Wait for migrations and readiness
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/readyz | grep -q '"ready"'; then
+              echo "stack ready (migrations applied)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "stack did not become ready; migrations may have failed" >&2
+          docker compose logs --no-color api
+          exit 1
+
       - name: Run Docker-backed integration tests
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/fluxa
@@ -69,3 +82,23 @@ jobs:
       - name: Tear down stack
         if: always()
         run: docker compose down -v --remove-orphans
+
+  container-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t fluxa-backend:scan .
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: fluxa-backend:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH

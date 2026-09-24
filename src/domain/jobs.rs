@@ -15,6 +15,7 @@ pub const JOB_STATUS_DEAD_LETTER: &str = "dead_letter";
 
 pub const JOB_TYPE_TASK_EXPORT: &str = "task_export";
 pub const JOB_TYPE_DUE_REMINDER_SWEEP: &str = "due_reminder_sweep";
+pub const JOB_TYPE_RETENTION_SWEEP: &str = "retention_sweep";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,6 +64,7 @@ impl FromStr for JobStatus {
 pub enum JobType {
     TaskExport,
     DueReminderSweep,
+    RetentionSweep,
 }
 
 impl JobType {
@@ -70,6 +72,7 @@ impl JobType {
         match self {
             Self::TaskExport => JOB_TYPE_TASK_EXPORT,
             Self::DueReminderSweep => JOB_TYPE_DUE_REMINDER_SWEEP,
+            Self::RetentionSweep => JOB_TYPE_RETENTION_SWEEP,
         }
     }
 }
@@ -87,6 +90,7 @@ impl FromStr for JobType {
         match value {
             JOB_TYPE_TASK_EXPORT => Ok(Self::TaskExport),
             JOB_TYPE_DUE_REMINDER_SWEEP => Ok(Self::DueReminderSweep),
+            JOB_TYPE_RETENTION_SWEEP => Ok(Self::RetentionSweep),
             _ => Err(AppError::Validation(format!(
                 "unsupported job type: {value}"
             ))),

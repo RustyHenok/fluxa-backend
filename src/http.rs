@@ -150,6 +150,9 @@ fn router(state: AppState) -> AppResult<Router> {
             "/v1",
             Router::new().merge(auth_routes).merge(protected_routes),
         )
+        .layer(axum_middleware::from_fn(
+            middleware::track_metrics_middleware,
+        ))
         .layer(TraceLayer::new_for_http())
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(

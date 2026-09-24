@@ -75,6 +75,24 @@ pub async fn enqueue_due_reminder_sweep(
     Ok(maybe_job)
 }
 
+/// Enqueues a retention sweep when none is pending and the cadence window has
+/// elapsed since the last one was scheduled.
+pub async fn enqueue_retention_sweep(state: &AppState) -> AppResult<Option<BackgroundJobRecord>> {
+    let maybe_job = state
+        .db
+        .ensure_retention_job(
+            state.config.retention_sweep_interval_hours,
+            state.config.max_job_attempts,
+        )
+        .await?;
+
+    if let Some(job) = maybe_job.as_ref() {
+        state.cache.enqueue_job(job.id).await?;
+    }
+
+    Ok(maybe_job)
+}
+
 pub async fn get_job(state: &AppState, job_id: Uuid) -> AppResult<Option<BackgroundJobRecord>> {
     state.db.get_job(job_id).await
 }
@@ -146,6 +164,7 @@ pub async fn process_job(state: &AppState, job_id: Uuid) -> AppResult<()> {
     let outcome = match job.parsed_job_type()? {
         JobType::TaskExport => process_export_job(state, &job).await,
         JobType::DueReminderSweep => process_due_reminder_job(state, &job).await,
+        JobType::RetentionSweep => process_retention_job(state).await,
     };
 
     match outcome {
@@ -270,6 +289,39 @@ fn csv_escape(field: &str) -> String {
     } else {
         field.to_owned()
     }
+}
+
+/// Runs all retention purges and reports per-table deletion counts.
+async fn process_retention_job(state: &AppState) -> AppResult<serde_json::Value> {
+    let refresh_tokens = state
+        .db
+        .purge_stale_refresh_tokens(state.config.refresh_token_retention_days)
+        .await?;
+    let jobs = state
+        .db
+        .purge_terminal_jobs(state.config.job_retention_days)
+        .await?;
+    let notifications = state
+        .db
+        .purge_terminal_notifications(state.config.notification_retention_days)
+        .await?;
+    let audit_events = state
+        .db
+        .purge_old_audit_events(state.config.audit_retention_days)
+        .await?;
+
+    counter!("retention_rows_purged_total", "table" => "refresh_tokens").increment(refresh_tokens);
+    counter!("retention_rows_purged_total", "table" => "background_jobs").increment(jobs);
+    counter!("retention_rows_purged_total", "table" => "notifications").increment(notifications);
+    counter!("retention_rows_purged_total", "table" => "audit_log").increment(audit_events);
+
+    Ok(json!({
+        "generated_at": Utc::now(),
+        "refresh_tokens_purged": refresh_tokens,
+        "jobs_purged": jobs,
+        "notifications_purged": notifications,
+        "audit_events_purged": audit_events,
+    }))
 }
 
 async fn process_due_reminder_job(

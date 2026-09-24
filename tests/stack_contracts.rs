@@ -11,8 +11,9 @@ mod support;
 
 use support::{
     TestServer, add_membership, authed_grpc_request, count_notifications, create_project,
-    create_task, fetch_notification_token, insert_stale_running_job, poll_job_status,
-    register_user, stack_test_guard, wait_for_job_status, wait_for_rest_job_completion,
+    create_task, fetch_notification_token, insert_retention_fixtures, insert_stale_running_job,
+    poll_job_status, register_user, retention_leftover_count, stack_test_guard,
+    wait_for_job_status, wait_for_rest_job_completion,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1220,6 +1221,60 @@ async fn due_reminder_sweep_notifies_assignees() {
         count_notifications(&owner.email, "task_due_soon").await,
         1,
         "dedupe should keep a single due-soon notification"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn retention_sweep_purges_old_rows_and_metrics_expose_route_series() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "retention").await;
+
+    let fixtures = insert_retention_fixtures(&owner.user_id, &owner.tenant_id).await;
+    assert_eq!(
+        retention_leftover_count(&fixtures).await,
+        4,
+        "all retention fixtures should exist before the sweep"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if retention_leftover_count(&fixtures).await == 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "retention sweep should purge fixture rows within the deadline"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    // Give the sampler at least one tick before scraping metrics.
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+
+    let metrics = client
+        .get(format!("{}/metrics", server.http_base))
+        .send()
+        .await
+        .expect("metrics request should succeed");
+    assert_eq!(metrics.status(), reqwest::StatusCode::OK);
+    let body = metrics.text().await.expect("metrics body should be text");
+
+    assert!(
+        body.contains("http_requests_total{")
+            && body.contains("route=\"/v1/auth/register\"")
+            && body.contains("http_request_duration_seconds"),
+        "metrics should expose per-route counters and latency histograms"
+    );
+    assert!(
+        body.contains("db_pool_connections{"),
+        "metrics should expose DB pool gauges"
+    );
+    assert!(
+        body.contains("retention_rows_purged_total{"),
+        "metrics should count purged retention rows"
     );
 }
 

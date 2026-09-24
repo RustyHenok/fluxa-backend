@@ -5,6 +5,7 @@ mod memberships;
 mod notifications;
 mod projects;
 mod refresh_tokens;
+mod retention;
 mod tasks;
 mod user_tokens;
 mod users;
@@ -43,5 +44,10 @@ impl Database {
     pub async fn health_check(&self) -> AppResult<()> {
         let _: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&self.pool).await?;
         Ok(())
+    }
+
+    /// Returns (open connections, idle connections) for the metrics sampler.
+    pub fn pool_stats(&self) -> (u32, usize) {
+        (self.pool.size(), self.pool.num_idle())
     }
 }

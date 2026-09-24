@@ -1,7 +1,9 @@
-use axum::extract::{Request, State};
+use std::time::Instant;
+
+use axum::extract::{MatchedPath, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
-use metrics::counter;
+use metrics::{counter, histogram};
 
 use crate::error::AppResult;
 use crate::state::AppState;
@@ -10,6 +12,38 @@ use super::AuthenticatedUser;
 use super::helpers::{
     attach_rate_limit_headers, bearer_token, client_identifier, parse_uuid, rate_limit_response,
 };
+
+/// Records a labeled request counter and duration histogram for every HTTP
+/// request, keyed by method and the matched route template.
+pub(super) async fn track_metrics_middleware(request: Request, next: Next) -> Response {
+    let method = request.method().to_string();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|path| path.as_str().to_owned())
+        .unwrap_or_else(|| "unmatched".to_owned());
+
+    let started_at = Instant::now();
+    let response = next.run(request).await;
+    let elapsed = started_at.elapsed().as_secs_f64();
+    let status = response.status().as_u16().to_string();
+
+    counter!(
+        "http_requests_total",
+        "method" => method.clone(),
+        "route" => route.clone(),
+        "status" => status
+    )
+    .increment(1);
+    histogram!(
+        "http_request_duration_seconds",
+        "method" => method,
+        "route" => route
+    )
+    .record(elapsed);
+
+    response
+}
 
 pub(super) async fn auth_rate_limit_middleware(
     State(state): State<AppState>,
@@ -37,7 +71,6 @@ pub(super) async fn auth_rate_limit_middleware(
 
     let mut response = next.run(request).await;
     attach_rate_limit_headers(&mut response, &decision)?;
-    counter!("http_requests_total", "route" => "auth").increment(1);
     Ok(response)
 }
 
@@ -90,6 +123,5 @@ pub(super) async fn protected_middleware(
 
     let mut response = next.run(request).await;
     attach_rate_limit_headers(&mut response, &decision)?;
-    counter!("http_requests_total", "route" => "protected").increment(1);
     Ok(response)
 }

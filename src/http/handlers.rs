@@ -50,11 +50,33 @@ pub(super) async fn readyz(
     Ok(Json(HealthResponse { status: "ready" }))
 }
 
-pub(super) async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
-    (
+pub(super) async fn metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    if let Some(expected) = state.config.metrics_auth_token.as_deref() {
+        let provided = super::helpers::bearer_token(&headers)?;
+        if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+            return Err(AppError::Unauthorized("invalid metrics token".into()));
+        }
+    }
+
+    Ok((
         [(CONTENT_TYPE, "text/plain; version=0.0.4")],
         state.metrics.render(),
-    )
+    ))
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    let mut diff = 0u8;
+    for (a, b) in left.iter().zip(right.iter()) {
+        diff |= a ^ b;
+    }
+    diff == 0
 }
 
 pub(super) async fn register(

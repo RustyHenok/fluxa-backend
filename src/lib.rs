@@ -11,6 +11,7 @@ pub mod http;
 pub mod jobs;
 pub mod openapi;
 pub mod pagination;
+pub mod sampler;
 pub mod services;
 pub mod state;
 pub mod storage;
@@ -67,6 +68,12 @@ pub async fn run(cli: Cli) -> AppResult<()> {
             jobs::run_worker(worker_state, worker_rx).await
         }));
     }
+
+    let sampler_state = state.clone();
+    let sampler_rx = shutdown_rx.clone();
+    tasks.push(tokio::spawn(async move {
+        sampler::run_sampler(sampler_state, sampler_rx).await
+    }));
 
     tokio::select! {
         result = wait_for_first_task(&mut tasks) => {

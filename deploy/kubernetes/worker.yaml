@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fluxa-worker
+  labels:
+    app.kubernetes.io/name: fluxa-backend
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1 # safe to scale horizontally; job claims are atomic
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fluxa-backend
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fluxa-backend
+        app.kubernetes.io/component: worker
+    spec:
+      containers:
+        - name: worker
+          image: fluxa-backend:latest # replace with your registry image
+          args: ["--mode", "worker"]
+          env:
+            - name: APP_MODE
+              value: worker
+            - name: MAILER_PROVIDER
+              value: log # switch to smtp with SMTP_URL/MAIL_FROM in the secret
+            - name: ARTIFACT_STORAGE_DIR
+              value: /var/lib/fluxa/exports
+          envFrom:
+            - secretRef:
+                name: fluxa-backend
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: exports
+              mountPath: /var/lib/fluxa/exports
+      volumes:
+        - name: exports
+          persistentVolumeClaim:
+            claimName: fluxa-exports

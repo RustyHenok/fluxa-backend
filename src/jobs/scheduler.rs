@@ -28,6 +28,15 @@ pub(super) async fn schedule_due_reminders_loop(
                         warn!("failed to schedule due reminder job: {error}");
                     }
                 }
+                match jobs_service::enqueue_retention_sweep(&state).await {
+                    Ok(Some(job)) => {
+                        info!("scheduled retention sweep job {}", job.id);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        warn!("failed to schedule retention sweep job: {error}");
+                    }
+                }
             }
         }
     }

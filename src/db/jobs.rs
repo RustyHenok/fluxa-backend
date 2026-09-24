@@ -5,6 +5,7 @@ use uuid::Uuid;
 use super::Database;
 use crate::domain::{
     BackgroundJobRecord, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER, JOB_TYPE_DUE_REMINDER_SWEEP,
+    JOB_TYPE_RETENTION_SWEEP,
 };
 use crate::error::{AppError, AppResult};
 
@@ -213,5 +214,39 @@ impl Database {
         )
         .await
         .map(Some)
+    }
+
+    /// Enqueues a retention sweep unless one is already pending or one ran
+    /// within the configured cadence window.
+    pub async fn ensure_retention_job(
+        &self,
+        interval_hours: i64,
+        max_attempts: i32,
+    ) -> AppResult<Option<BackgroundJobRecord>> {
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM background_jobs
+            WHERE job_type = $1
+              AND (
+                    status IN ('queued', 'running')
+                    OR scheduled_at > now() - make_interval(hours => $2::int)
+                  )
+            ORDER BY scheduled_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(JOB_TYPE_RETENTION_SWEEP)
+        .bind(interval_hours)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if existing.is_some() {
+            return Ok(None);
+        }
+
+        self.create_job(None, JOB_TYPE_RETENTION_SWEEP, json!({}), max_attempts)
+            .await
+            .map(Some)
     }
 }

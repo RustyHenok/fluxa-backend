@@ -63,6 +63,8 @@ impl TestServer {
             .env("GRPC_AUTH_TOKEN", TEST_GRPC_AUTH_TOKEN)
             .env("JOB_LEASE_SECONDS", "3")
             .env("WORKER_DISPATCH_INTERVAL_MS", "500")
+            .env("WORKER_SCHEDULER_INTERVAL_MS", "1000")
+            .env("SAMPLER_INTERVAL_MS", "500")
             .env("MAILER_PROVIDER", "log")
             .env("NOTIFY_DISPATCH_INTERVAL_MS", "250")
             .env("ARTIFACT_STORAGE_DIR", &artifact_dir)
@@ -422,6 +424,136 @@ pub async fn insert_stale_running_job(
     .expect("stale job insert should succeed");
 
     job_id.to_string()
+}
+
+pub struct RetentionFixtures {
+    pub token_id: String,
+    pub job_id: String,
+    pub notification_id: String,
+    pub audit_id: String,
+}
+
+pub async fn insert_retention_fixtures(user_id: &str, tenant_id: &str) -> RetentionFixtures {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&test_database_url())
+        .await
+        .expect("test database should be reachable");
+
+    let user = Uuid::parse_str(user_id).expect("user id should be uuid");
+    let tenant = Uuid::parse_str(tenant_id).expect("tenant id should be uuid");
+
+    let token_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO refresh_tokens (id, user_id, tenant_id, expires_at, created_at)
+        VALUES ($1, $2, $3, now() - interval '60 days', now() - interval '61 days')
+        "#,
+    )
+    .bind(token_id)
+    .bind(user)
+    .bind(tenant)
+    .execute(&pool)
+    .await
+    .expect("expired refresh token insert should succeed");
+
+    let job_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO background_jobs
+            (id, tenant_id, job_type, payload, status, attempts, max_attempts,
+             scheduled_at, started_at, finished_at)
+        VALUES
+            ($1, $2, 'task_export', '{}'::jsonb, 'completed', 1, 3,
+             now() - interval '60 days', now() - interval '60 days',
+             now() - interval '60 days')
+        "#,
+    )
+    .bind(job_id)
+    .bind(tenant)
+    .execute(&pool)
+    .await
+    .expect("old terminal job insert should succeed");
+
+    let notification_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO notifications
+            (id, tenant_id, user_id, kind, recipient, payload, status,
+             attempts, max_attempts, scheduled_at, sent_at, created_at)
+        VALUES
+            ($1, $2, $3, 'task_due_soon', 'retention@test.local', '{}'::jsonb,
+             'sent', 1, 5, now() - interval '60 days', now() - interval '60 days',
+             now() - interval '60 days')
+        "#,
+    )
+    .bind(notification_id)
+    .bind(tenant)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .expect("old sent notification insert should succeed");
+
+    let audit_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+        INSERT INTO audit_log
+            (id, tenant_id, actor_user_id, subject_type, subject_id, event_type,
+             payload, created_at)
+        VALUES
+            ($1, $2, $3, 'auth', $3, 'auth.login', '{}'::jsonb,
+             now() - interval '400 days')
+        "#,
+    )
+    .bind(audit_id)
+    .bind(tenant)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .expect("old audit event insert should succeed");
+
+    sqlx::query(
+        "DELETE FROM background_jobs WHERE job_type = 'retention_sweep' AND status <> 'running'",
+    )
+    .execute(&pool)
+    .await
+    .expect("clearing prior retention jobs should succeed");
+
+    RetentionFixtures {
+        token_id: token_id.to_string(),
+        job_id: job_id.to_string(),
+        notification_id: notification_id.to_string(),
+        audit_id: audit_id.to_string(),
+    }
+}
+
+pub async fn retention_leftover_count(fixtures: &RetentionFixtures) -> i64 {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&test_database_url())
+        .await
+        .expect("test database should be reachable");
+
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT
+            (SELECT count(*) FROM refresh_tokens WHERE id = $1::uuid)
+          + (SELECT count(*) FROM background_jobs WHERE id = $2::uuid)
+          + (SELECT count(*) FROM notifications WHERE id = $3::uuid)
+          + (SELECT count(*) FROM audit_log WHERE id = $4::uuid)
+        "#,
+    )
+    .bind(Uuid::parse_str(&fixtures.token_id).expect("token id should be uuid"))
+    .bind(Uuid::parse_str(&fixtures.job_id).expect("job id should be uuid"))
+    .bind(Uuid::parse_str(&fixtures.notification_id).expect("notification id should be uuid"))
+    .bind(Uuid::parse_str(&fixtures.audit_id).expect("audit id should be uuid"))
+    .fetch_one(&pool)
+    .await
+    .expect("retention leftover count should succeed");
+
+    count
 }
 
 pub async fn wait_for_job_status(

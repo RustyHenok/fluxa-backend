@@ -12,8 +12,8 @@ pub use auth::{
 };
 pub use jobs::{
     BackgroundJobRecord, ExportFormat, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER,
-    JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_TASK_EXPORT,
-    JobResponse, JobResultResponse, JobStatus, JobType,
+    JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_RETENTION_SWEEP,
+    JOB_TYPE_TASK_EXPORT, JobResponse, JobResultResponse, JobStatus, JobType,
 };
 pub use notifications::{
     AuditEventRecord, AuditEventResponse, NOTIFICATION_STATUS_DEAD_LETTER,

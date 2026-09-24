@@ -157,6 +157,16 @@ impl CacheStore {
         Ok(())
     }
 
+    /// Returns the number of jobs waiting in the Redis dispatch queue, used by
+    /// the metrics sampler.
+    pub async fn job_queue_depth(&self) -> AppResult<usize> {
+        let mut connection = self.connection().await?;
+        connection
+            .llen(&self.config.job_queue_name)
+            .await
+            .map_err(AppError::from)
+    }
+
     pub async fn dequeue_job(&self, timeout_seconds: usize) -> AppResult<Option<Uuid>> {
         let mut connection = self.connection().await?;
         let result: Option<[String; 2]> = connection
