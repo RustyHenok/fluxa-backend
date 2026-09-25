@@ -1,3 +1,4 @@
+mod attachments;
 mod audit;
 mod comments;
 mod invitations;

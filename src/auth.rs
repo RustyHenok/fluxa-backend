@@ -184,6 +184,7 @@ mod tests {
                 reminder_due_soon_hours: 24,
                 reminder_dedupe_ttl_hours: 24,
                 artifact_storage_dir: "data/exports".into(),
+                max_attachment_size_bytes: 5_242_880,
                 retention_sweep_interval_hours: 24,
                 refresh_token_retention_days: 30,
                 job_retention_days: 30,

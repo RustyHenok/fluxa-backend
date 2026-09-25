@@ -11,6 +11,7 @@ use crate::error::{AppError, AppResult};
 pub trait ArtifactStore {
     fn put(&self, key: &str, bytes: &[u8]) -> impl Future<Output = AppResult<()>> + Send;
     fn get(&self, key: &str) -> impl Future<Output = AppResult<Option<Vec<u8>>>> + Send;
+    fn delete(&self, key: &str) -> impl Future<Output = AppResult<()>> + Send;
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +53,17 @@ impl ArtifactStore for LocalFsStore {
             ))),
         }
     }
+
+    async fn delete(&self, key: &str) -> AppResult<()> {
+        let path = self.resolve(key)?;
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(AppError::internal(format!(
+                "failed to delete artifact: {error}"
+            ))),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -75,6 +87,12 @@ impl ArtifactStore for AnyArtifactStore {
     async fn get(&self, key: &str) -> AppResult<Option<Vec<u8>>> {
         match self {
             Self::LocalFs(store) => store.get(key).await,
+        }
+    }
+
+    async fn delete(&self, key: &str) -> AppResult<()> {
+        match self {
+            Self::LocalFs(store) => store.delete(key).await,
         }
     }
 }

@@ -146,6 +146,7 @@ The following create endpoints require `Idempotency-Key`:
 - `POST /v1/tenants/:tenant_id/invitations`
 - `POST /v1/labels`
 - `POST /v1/tasks/:task_id/comments`
+- `POST /v1/tasks/:task_id/attachments`
 
 Client expectation:
 
@@ -214,6 +215,10 @@ Client expectation:
 - `POST /v1/tasks/:task_id/comments`
 - `PATCH /v1/tasks/:task_id/comments/:comment_id` (author only)
 - `DELETE /v1/tasks/:task_id/comments/:comment_id` (author or owner/admin)
+- `GET /v1/tasks/:task_id/attachments`
+- `POST /v1/tasks/:task_id/attachments` (raw body upload with `?file_name=`)
+- `GET /v1/tasks/:task_id/attachments/:attachment_id/download`
+- `DELETE /v1/tasks/:task_id/attachments/:attachment_id` (uploader or owner/admin)
 
 ### Soft Delete Semantics
 
@@ -243,6 +248,15 @@ Client expectation:
 - only the comment author can edit a comment; the author or an owner/admin can delete it
 - adding or deleting a comment appears in the task audit feed (`task_comment_added` / `task_comment_deleted`)
 - when the task has an assignee other than the comment author, the assignee receives a notification
+
+### Task Attachments
+
+- any member can upload attachments by sending the raw file bytes as the request body to `POST /v1/tasks/:task_id/attachments?file_name=...`; the request `Content-Type` header is stored and echoed on download
+- uploads require an `Idempotency-Key` header, a non-empty body, and a safe `file_name` (no path separators, quotes, or control characters; at most 255 characters)
+- the maximum upload size is `MAX_ATTACHMENT_SIZE_BYTES` (default 5 MiB) — larger requests are rejected with `413`; a task holds at most 20 attachments
+- attachment responses include a `download_path` pointing at `GET /v1/tasks/:task_id/attachments/:attachment_id/download`, which streams the bytes with the stored content type
+- only the uploader or an owner/admin can delete an attachment; deletion also removes the stored file
+- uploads and deletions appear in the task audit feed (`task_attachment_added` / `task_attachment_deleted`)
 
 ### Jobs / Exports
 

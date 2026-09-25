@@ -23,6 +23,7 @@ pub fn document() -> Value {
             { "name": "projects", "description": "Tenant-scoped project hierarchy endpoints." },
             { "name": "labels", "description": "Tenant-scoped label management and task label assignment." },
             { "name": "comments", "description": "Task comment threads." },
+            { "name": "attachments", "description": "Task file attachments stored via the artifact storage backend." },
             { "name": "tasks", "description": "Task CRUD, filtering, and audit endpoints." },
             { "name": "jobs", "description": "Background job creation, status, and results." },
             { "name": "account", "description": "Account lifecycle: email verification, password reset, credential changes." },
@@ -902,6 +903,107 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/tasks/{task_id}/attachments": {
+                "get": {
+                    "tags": ["attachments"],
+                    "operationId": "listTaskAttachments",
+                    "summary": "List task attachments",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Attachments on the task, newest first.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("AttachmentResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Task was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["attachments"],
+                    "operationId": "uploadTaskAttachment",
+                    "summary": "Upload a task attachment",
+                    "description": "Uploads the raw request body as an attachment. The request Content-Type header is stored as the attachment content type. A task can hold at most 20 attachments; the maximum body size is configured by MAX_ATTACHMENT_SIZE_BYTES (default 5 MiB) and larger uploads are rejected with 413.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        json!({
+                            "name": "file_name",
+                            "in": "query",
+                            "required": true,
+                            "description": "File name for the attachment (no path separators).",
+                            "schema": { "type": "string", "maxLength": 255 }
+                        }),
+                        idempotency_header_parameter()
+                    ],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/octet-stream": {
+                                "schema": { "type": "string", "format": "binary" }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "201": json_response("Attachment created.", schema_ref("AttachmentResponse")),
+                        "400": error_response("Invalid file name, empty body, attachment limit reached, or missing Idempotency-Key."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot modify tasks."),
+                        "404": error_response("Task was not found."),
+                        "409": error_response("The idempotency key is in progress or conflicts."),
+                        "413": error_response("The upload exceeds the configured size limit."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/attachments/{attachment_id}": {
+                "delete": {
+                    "tags": ["attachments"],
+                    "operationId": "deleteTaskAttachment",
+                    "summary": "Delete a task attachment",
+                    "description": "The uploader or an owner/admin can delete an attachment; the stored file is removed as well.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        path_uuid_parameter("attachment_id", "Attachment identifier.")
+                    ],
+                    "responses": {
+                        "204": { "description": "Attachment deleted." },
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Only the uploader or an owner/admin can delete an attachment."),
+                        "404": error_response("Task or attachment was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/attachments/{attachment_id}/download": {
+                "get": {
+                    "tags": ["attachments"],
+                    "operationId": "downloadTaskAttachment",
+                    "summary": "Download a task attachment",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        path_uuid_parameter("attachment_id", "Attachment identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "The attachment bytes with the stored content type and a content-disposition file name.",
+                            "content": {
+                                "application/octet-stream": {
+                                    "schema": { "type": "string", "format": "binary" }
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Task or attachment was not found, or the content is no longer available."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/tasks/{task_id}/audit": {
                 "get": {
                     "tags": ["tasks"],
@@ -1077,6 +1179,32 @@ pub fn document() -> Value {
                         "email": string_schema(),
                         "role": schema_ref("MembershipRole"),
                         "joined_at": date_time_schema()
+                    }
+                },
+                "AttachmentResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "task_id",
+                        "uploaded_by",
+                        "file_name",
+                        "content_type",
+                        "size_bytes",
+                        "download_path",
+                        "created_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "task_id": uuid_schema(),
+                        "uploaded_by": uuid_schema(),
+                        "file_name": string_schema(),
+                        "content_type": string_schema(),
+                        "size_bytes": json!({ "type": "integer", "format": "int64" }),
+                        "download_path": json!({
+                            "type": "string",
+                            "description": "Relative API path for downloading the attachment bytes."
+                        }),
+                        "created_at": date_time_schema()
                     }
                 },
                 "CommentPayload": {

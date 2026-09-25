@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::middleware as axum_middleware;
 use axum::routing::{delete, get, patch, post};
@@ -151,6 +152,22 @@ fn router(state: AppState) -> AppResult<Router> {
         .route(
             "/tasks/:task_id/comments/:comment_id",
             patch(handlers::update_task_comment).delete(handlers::delete_task_comment),
+        )
+        .route(
+            "/tasks/:task_id/attachments",
+            get(handlers::list_task_attachments)
+                .post(handlers::upload_task_attachment)
+                .route_layer(DefaultBodyLimit::max(
+                    state.config.max_attachment_size_bytes,
+                )),
+        )
+        .route(
+            "/tasks/:task_id/attachments/:attachment_id",
+            delete(handlers::delete_task_attachment),
+        )
+        .route(
+            "/tasks/:task_id/attachments/:attachment_id/download",
+            get(handlers::download_task_attachment),
         )
         .route("/tasks/:task_id/audit", get(handlers::list_task_audit))
         .route("/exports/tasks", post(handlers::create_export))

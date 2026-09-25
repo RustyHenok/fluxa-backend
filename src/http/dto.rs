@@ -210,6 +210,11 @@ pub(super) struct CommentPatchPayload {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct AttachmentUploadQuery {
+    pub(super) file_name: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ProjectPayload {
     pub(super) name: String,
     pub(super) description: Option<String>,

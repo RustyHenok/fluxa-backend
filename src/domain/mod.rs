@@ -1,3 +1,4 @@
+pub mod attachments;
 pub mod auth;
 pub mod comments;
 pub mod jobs;
@@ -6,6 +7,10 @@ pub mod notifications;
 pub mod projects;
 pub mod tasks;
 
+pub use attachments::{
+    AttachmentRecord, AttachmentResponse, MAX_ATTACHMENTS_PER_TASK,
+    normalize_attachment_content_type, validate_attachment_file_name,
+};
 pub use auth::{
     InvitationRecord, InvitationResponse, MembershipRecord, MembershipRole, ROLE_ADMIN,
     ROLE_MEMBER, ROLE_OWNER, RefreshTokenRecord, TOKEN_KIND_EMAIL_VERIFICATION,

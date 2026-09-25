@@ -94,6 +94,8 @@ pub struct Cli {
     pub reminder_dedupe_ttl_hours: i64,
     #[arg(long, env = "ARTIFACT_STORAGE_DIR", default_value = "data/exports")]
     pub artifact_storage_dir: String,
+    #[arg(long, env = "MAX_ATTACHMENT_SIZE_BYTES", default_value_t = 5_242_880)]
+    pub max_attachment_size_bytes: usize,
     #[arg(long, env = "RETENTION_SWEEP_INTERVAL_HOURS", default_value_t = 24)]
     pub retention_sweep_interval_hours: i64,
     #[arg(long, env = "REFRESH_TOKEN_RETENTION_DAYS", default_value_t = 30)]
@@ -214,6 +216,12 @@ impl Cli {
         if self.artifact_storage_dir.trim().is_empty() {
             return Err(AppError::Validation(
                 "ARTIFACT_STORAGE_DIR must not be empty".into(),
+            ));
+        }
+
+        if self.max_attachment_size_bytes == 0 {
+            return Err(AppError::Validation(
+                "MAX_ATTACHMENT_SIZE_BYTES must be positive".into(),
             ));
         }
 

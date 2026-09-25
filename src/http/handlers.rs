@@ -1,4 +1,5 @@
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
@@ -8,6 +9,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::cache::StoredResponse;
+use crate::domain::{
+    AttachmentResponse, normalize_attachment_content_type, validate_attachment_file_name,
+};
 use crate::domain::{CommentResponse, validate_comment_body};
 use crate::domain::{
     CreateLabelInput, CreateProjectInput, CreateTaskInput, DashboardSummary, InvitationResponse,
@@ -19,19 +23,20 @@ use crate::domain::{
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
-    account as account_service, audit as audit_service, auth as auth_service,
-    comments as comment_service, jobs as jobs_service, labels as label_service,
-    memberships as membership_service, projects as project_service, tasks as task_service,
+    account as account_service, attachments as attachment_service, audit as audit_service,
+    auth as auth_service, comments as comment_service, jobs as jobs_service,
+    labels as label_service, memberships as membership_service, projects as project_service,
+    tasks as task_service,
 };
 use crate::state::AppState;
 use crate::storage::ArtifactStore;
 
 use super::AuthenticatedUser;
 use super::dto::{
-    AuditListQuery, AuthResponse, ChangeEmailPayload, ChangePasswordPayload, CommentListQuery,
-    CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest, HealthResponse,
-    InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse, LabelPatchPayload,
-    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
+    AttachmentUploadQuery, AuditListQuery, AuthResponse, ChangeEmailPayload, ChangePasswordPayload,
+    CommentListQuery, CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest,
+    HealthResponse, InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse,
+    LabelPatchPayload, LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
     PasswordResetConfirmPayload, PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload,
     RefreshRequest, RegisterRequest, ResendVerificationPayload, SwitchTenantRequest,
     TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse,
@@ -816,6 +821,149 @@ pub(super) async fn delete_task_comment(
         user.tenant_id,
         task_id,
         comment_id,
+        user.user_id,
+        user.role,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn list_task_attachments(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+) -> AppResult<Json<Vec<AttachmentResponse>>> {
+    let attachments = attachment_service::list_attachments(&state, user.tenant_id, task_id).await?;
+    Ok(Json(
+        attachments.iter().map(AttachmentResponse::from).collect(),
+    ))
+}
+
+pub(super) async fn upload_task_attachment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+    Query(query): Query<AttachmentUploadQuery>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    ensure_task_write_role(user.role)?;
+    let file_name = validate_attachment_file_name(&query.file_name)?;
+    let content_type = normalize_attachment_content_type(
+        headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+    );
+    if body.is_empty() {
+        return Err(AppError::Validation(
+            "attachment body must not be empty".into(),
+        ));
+    }
+    if body.len() > state.config.max_attachment_size_bytes {
+        return Err(AppError::Validation(format!(
+            "attachment exceeds the maximum size of {} bytes",
+            state.config.max_attachment_size_bytes
+        )));
+    }
+
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key =
+        state
+            .cache
+            .idempotency_key(user.tenant_id, "attachments:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match attachment_service::upload_attachment(
+        &state,
+        user.tenant_id,
+        task_id,
+        user.user_id,
+        file_name,
+        content_type,
+        &body,
+    )
+    .await
+    {
+        Ok(attachment) => {
+            let body =
+                serde_json::to_value(AttachmentResponse::from(&attachment)).map_err(|error| {
+                    AppError::internal(format!("failed to serialize attachment: {error}"))
+                })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn download_task_attachment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((task_id, attachment_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<impl IntoResponse> {
+    let (attachment, bytes) =
+        attachment_service::download_attachment(&state, user.tenant_id, task_id, attachment_id)
+            .await?;
+
+    let safe_name: String = attachment
+        .file_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok((
+        [
+            (CONTENT_TYPE, attachment.content_type),
+            (
+                CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{safe_name}\""),
+            ),
+        ],
+        bytes,
+    ))
+}
+
+pub(super) async fn delete_task_attachment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((task_id, attachment_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    attachment_service::delete_attachment(
+        &state,
+        user.tenant_id,
+        task_id,
+        attachment_id,
         user.user_id,
         user.role,
     )
