@@ -8,6 +8,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::cache::StoredResponse;
+use crate::domain::{CommentResponse, validate_comment_body};
 use crate::domain::{
     CreateLabelInput, CreateProjectInput, CreateTaskInput, DashboardSummary, InvitationResponse,
     JobResponse, JobResultResponse, LabelResponse, PaginatedAuditEvents, ProjectResponse,
@@ -18,18 +19,19 @@ use crate::domain::{
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
-    account as account_service, audit as audit_service, auth as auth_service, jobs as jobs_service,
-    labels as label_service, memberships as membership_service, projects as project_service,
-    tasks as task_service,
+    account as account_service, audit as audit_service, auth as auth_service,
+    comments as comment_service, jobs as jobs_service, labels as label_service,
+    memberships as membership_service, projects as project_service, tasks as task_service,
 };
 use crate::state::AppState;
 use crate::storage::ArtifactStore;
 
 use super::AuthenticatedUser;
 use super::dto::{
-    AuditListQuery, AuthResponse, ChangeEmailPayload, ChangePasswordPayload, ExportRequest,
-    HealthResponse, InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse,
-    LabelPatchPayload, LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
+    AuditListQuery, AuthResponse, ChangeEmailPayload, ChangePasswordPayload, CommentListQuery,
+    CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest, HealthResponse,
+    InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse, LabelPatchPayload,
+    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
     PasswordResetConfirmPayload, PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload,
     RefreshRequest, RegisterRequest, ResendVerificationPayload, SwitchTenantRequest,
     TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse,
@@ -705,6 +707,120 @@ pub(super) async fn put_task_labels(
     )
     .await?;
     Ok(Json(labels.iter().map(LabelResponse::from).collect()))
+}
+
+pub(super) async fn list_task_comments(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+    Query(query): Query<CommentListQuery>,
+) -> AppResult<Json<CommentListResponse>> {
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(AuditCursor::decode)
+        .transpose()?;
+    let page =
+        comment_service::list_comments(&state, user.tenant_id, task_id, cursor.as_ref(), limit)
+            .await?;
+
+    Ok(Json(CommentListResponse {
+        data: page.comments.iter().map(CommentResponse::from).collect(),
+        next_cursor: page.next_cursor.map(|value| value.encode()).transpose()?,
+    }))
+}
+
+pub(super) async fn create_task_comment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<CommentPayload>,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    ensure_task_write_role(user.role)?;
+    let body = validate_comment_body(&payload.body)?;
+
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(user.tenant_id, "comments:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match comment_service::create_comment(&state, user.tenant_id, task_id, user.user_id, body).await
+    {
+        Ok(comment) => {
+            let body = serde_json::to_value(CommentResponse::from(&comment)).map_err(|error| {
+                AppError::internal(format!("failed to serialize comment: {error}"))
+            })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn update_task_comment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((task_id, comment_id)): Path<(Uuid, Uuid)>,
+    Json(payload): Json<CommentPatchPayload>,
+) -> AppResult<Json<CommentResponse>> {
+    ensure_task_write_role(user.role)?;
+    let body = validate_comment_body(&payload.body)?;
+    let comment = comment_service::update_comment(
+        &state,
+        user.tenant_id,
+        task_id,
+        comment_id,
+        user.user_id,
+        body,
+    )
+    .await?;
+    Ok(Json(CommentResponse::from(&comment)))
+}
+
+pub(super) async fn delete_task_comment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((task_id, comment_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    comment_service::delete_comment(
+        &state,
+        user.tenant_id,
+        task_id,
+        comment_id,
+        user.user_id,
+        user.role,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(super) async fn dashboard_summary(

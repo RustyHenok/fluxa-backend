@@ -14,6 +14,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - Unified tenant audit log covering auth, membership, project, and account events
 - Soft delete with restore endpoints for projects and tasks, and full-text task search with substring fallback for short terms
 - Tenant-scoped task labels with per-label task filtering
+- Task comments with author-only edits, moderated deletes, and assignee notifications
 
 ## Main endpoints
 
@@ -60,6 +61,10 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - `DELETE /v1/labels/:label_id`
 - `GET /v1/tasks/:task_id/labels`
 - `PUT /v1/tasks/:task_id/labels`
+- `GET /v1/tasks/:task_id/comments`
+- `POST /v1/tasks/:task_id/comments`
+- `PATCH /v1/tasks/:task_id/comments/:comment_id`
+- `DELETE /v1/tasks/:task_id/comments/:comment_id`
 - `POST /v1/exports/tasks`
 - `GET /v1/jobs/:job_id`
 - `GET /v1/jobs/:job_id/result`

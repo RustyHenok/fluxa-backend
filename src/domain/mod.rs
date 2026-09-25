@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod comments;
 pub mod jobs;
 pub mod labels;
 pub mod notifications;
@@ -11,6 +12,7 @@ pub use auth::{
     TOKEN_KIND_PASSWORD_RESET, TenantMemberRecord, TenantMemberResponse, TenantMembershipResponse,
     TenantRecord, UserRecord, UserResponse, UserTokenRecord, validate_role,
 };
+pub use comments::{CommentRecord, CommentResponse, PaginatedComments, validate_comment_body};
 pub use jobs::{
     BackgroundJobRecord, ExportFormat, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER,
     JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_RETENTION_SWEEP,

@@ -22,6 +22,7 @@ pub fn document() -> Value {
             { "name": "tenants", "description": "Tenant-scoped membership endpoints." },
             { "name": "projects", "description": "Tenant-scoped project hierarchy endpoints." },
             { "name": "labels", "description": "Tenant-scoped label management and task label assignment." },
+            { "name": "comments", "description": "Task comment threads." },
             { "name": "tasks", "description": "Task CRUD, filtering, and audit endpoints." },
             { "name": "jobs", "description": "Background job creation, status, and results." },
             { "name": "account", "description": "Account lifecycle: email verification, password reset, credential changes." },
@@ -824,6 +825,83 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/tasks/{task_id}/comments": {
+                "get": {
+                    "tags": ["comments"],
+                    "operationId": "listTaskComments",
+                    "summary": "List task comments",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        limit_query_parameter(),
+                        cursor_query_parameter("cursor", "Opaque cursor from a previous task comment page.")
+                    ],
+                    "responses": {
+                        "200": json_response("Paginated task comments, newest first.", schema_ref("CommentListResponse")),
+                        "400": error_response("Invalid query parameters."),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Task was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["comments"],
+                    "operationId": "createTaskComment",
+                    "summary": "Add a comment to a task",
+                    "description": "Adds a comment authored by the caller. When the task has an assignee other than the author, a notification is queued for the assignee.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        idempotency_header_parameter()
+                    ],
+                    "requestBody": json_request_body(schema_ref("CommentPayload"), true),
+                    "responses": {
+                        "201": json_response("Comment created.", schema_ref("CommentResponse")),
+                        "400": error_response("Invalid comment payload or missing Idempotency-Key."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot comment on tasks."),
+                        "404": error_response("Task was not found."),
+                        "409": error_response("The idempotency key is in progress or conflicts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/comments/{comment_id}": {
+                "patch": {
+                    "tags": ["comments"],
+                    "operationId": "updateTaskComment",
+                    "summary": "Edit a task comment",
+                    "description": "Only the comment author can edit a comment.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        path_uuid_parameter("comment_id", "Comment identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("CommentPatchPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated comment.", schema_ref("CommentResponse")),
+                        "400": error_response("Invalid comment payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Only the comment author can edit a comment."),
+                        "404": error_response("Task or comment was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["comments"],
+                    "operationId": "deleteTaskComment",
+                    "summary": "Delete a task comment",
+                    "description": "The comment author or an owner/admin can delete a comment.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        path_uuid_parameter("comment_id", "Comment identifier.")
+                    ],
+                    "responses": {
+                        "204": { "description": "Comment deleted." },
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Only the comment author or an owner/admin can delete a comment."),
+                        "404": error_response("Task or comment was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/tasks/{task_id}/audit": {
                 "get": {
                     "tags": ["tasks"],
@@ -999,6 +1077,55 @@ pub fn document() -> Value {
                         "email": string_schema(),
                         "role": schema_ref("MembershipRole"),
                         "joined_at": date_time_schema()
+                    }
+                },
+                "CommentPayload": {
+                    "type": "object",
+                    "required": ["body"],
+                    "properties": {
+                        "body": json!({
+                            "type": "string",
+                            "description": "Comment text, trimmed server-side; at most 4000 characters.",
+                            "maxLength": 4000
+                        })
+                    }
+                },
+                "CommentPatchPayload": {
+                    "type": "object",
+                    "required": ["body"],
+                    "properties": {
+                        "body": json!({
+                            "type": "string",
+                            "description": "Replacement comment text, trimmed server-side; at most 4000 characters.",
+                            "maxLength": 4000
+                        })
+                    }
+                },
+                "CommentResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "task_id",
+                        "author_id",
+                        "body",
+                        "created_at",
+                        "updated_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "task_id": uuid_schema(),
+                        "author_id": uuid_schema(),
+                        "body": string_schema(),
+                        "created_at": date_time_schema(),
+                        "updated_at": date_time_schema()
+                    }
+                },
+                "CommentListResponse": {
+                    "type": "object",
+                    "required": ["data", "next_cursor"],
+                    "properties": {
+                        "data": array_schema(schema_ref("CommentResponse")),
+                        "next_cursor": nullable(string_schema())
                     }
                 },
                 "LabelPayload": {

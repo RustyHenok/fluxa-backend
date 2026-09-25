@@ -145,6 +145,7 @@ The following create endpoints require `Idempotency-Key`:
 - `POST /v1/projects`
 - `POST /v1/tenants/:tenant_id/invitations`
 - `POST /v1/labels`
+- `POST /v1/tasks/:task_id/comments`
 
 Client expectation:
 
@@ -209,6 +210,10 @@ Client expectation:
 - `DELETE /v1/labels/:label_id` (owner/admin)
 - `GET /v1/tasks/:task_id/labels`
 - `PUT /v1/tasks/:task_id/labels` (replace the task's label set)
+- `GET /v1/tasks/:task_id/comments`
+- `POST /v1/tasks/:task_id/comments`
+- `PATCH /v1/tasks/:task_id/comments/:comment_id` (author only)
+- `DELETE /v1/tasks/:task_id/comments/:comment_id` (author or owner/admin)
 
 ### Soft Delete Semantics
 
@@ -230,6 +235,14 @@ Client expectation:
 - `PUT /v1/tasks/:task_id/labels` replaces the task's full label set with `{ "label_ids": [...] }` and returns the resulting labels; sending `[]` clears them
 - deleting a label removes it from every task that carried it
 - task listings and exports accept a `label_id` filter that returns only tasks carrying that label
+
+### Task Comments
+
+- any member can comment on a task; the body is trimmed and limited to 4000 characters
+- `GET /v1/tasks/:task_id/comments` returns newest-first pages with the standard `data` + `next_cursor` envelope (`limit` 1–100, default 20)
+- only the comment author can edit a comment; the author or an owner/admin can delete it
+- adding or deleting a comment appears in the task audit feed (`task_comment_added` / `task_comment_deleted`)
+- when the task has an assignee other than the comment author, the assignee receives a notification
 
 ### Jobs / Exports
 

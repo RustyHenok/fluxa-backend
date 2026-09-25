@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::CommentResponse;
 use crate::domain::{
     ExportFormat, InvitationResponse, TaskAuditResponse, TaskFilters, TaskResponse,
     TenantMembershipResponse, UserResponse, validate_task_priority, validate_task_status,
@@ -184,6 +185,28 @@ pub(super) struct TaskAuditQuery {
 pub(super) struct TaskAuditListResponse {
     pub(super) data: Vec<TaskAuditResponse>,
     pub(super) next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub(super) struct CommentListQuery {
+    pub(super) limit: Option<usize>,
+    pub(super) cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct CommentListResponse {
+    pub(super) data: Vec<CommentResponse>,
+    pub(super) next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CommentPayload {
+    pub(super) body: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CommentPatchPayload {
+    pub(super) body: String,
 }
 
 #[derive(Debug, Deserialize)]

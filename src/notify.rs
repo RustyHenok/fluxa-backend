@@ -18,6 +18,7 @@ pub const KIND_EMAIL_VERIFICATION: &str = "email_verification";
 pub const KIND_PASSWORD_RESET: &str = "password_reset";
 pub const KIND_TASK_DUE_SOON: &str = "task_due_soon";
 pub const KIND_TASK_OVERDUE: &str = "task_overdue";
+pub const KIND_TASK_COMMENTED: &str = "task_commented";
 
 #[derive(Debug, Clone)]
 pub struct MailMessage {
@@ -184,6 +185,15 @@ pub fn render_notification(notification: &NotificationRecord) -> AppResult<MailM
                 "The task \"{}\" was due at {} and is now overdue.",
                 payload_str(payload, "title"),
                 payload_str(payload, "due_at"),
+            ),
+        },
+        KIND_TASK_COMMENTED => MailMessage {
+            to: notification.recipient.clone(),
+            subject: format!("New comment on task: {}", payload_str(payload, "title")),
+            body: format!(
+                "A new comment was added to the task \"{}\":\n{}",
+                payload_str(payload, "title"),
+                payload_str(payload, "body"),
             ),
         },
         other => {

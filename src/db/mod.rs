@@ -1,4 +1,5 @@
 mod audit;
+mod comments;
 mod invitations;
 mod jobs;
 mod labels;

@@ -1,6 +1,7 @@
 pub mod account;
 pub mod audit;
 pub mod auth;
+pub mod comments;
 pub mod jobs;
 pub mod labels;
 pub mod memberships;

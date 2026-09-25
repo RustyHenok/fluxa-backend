@@ -144,6 +144,14 @@ fn router(state: AppState) -> AppResult<Router> {
             "/tasks/:task_id/labels",
             get(handlers::get_task_labels).put(handlers::put_task_labels),
         )
+        .route(
+            "/tasks/:task_id/comments",
+            get(handlers::list_task_comments).post(handlers::create_task_comment),
+        )
+        .route(
+            "/tasks/:task_id/comments/:comment_id",
+            patch(handlers::update_task_comment).delete(handlers::delete_task_comment),
+        )
         .route("/tasks/:task_id/audit", get(handlers::list_task_audit))
         .route("/exports/tasks", post(handlers::create_export))
         .route("/jobs/:job_id", get(handlers::get_job))
