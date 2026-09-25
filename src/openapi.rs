@@ -1019,7 +1019,7 @@ pub fn document() -> Value {
                         "name": string_schema(),
                         "color": nullable(json!({
                             "type": "string",
-                            "description": "Hex color like #4f46e5. Send null to clear the color.",
+                            "description": "Hex color like #4f46e5.",
                             "pattern": "^#[0-9a-fA-F]{6}$"
                         }))
                     }

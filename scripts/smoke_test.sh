@@ -173,10 +173,37 @@ PROJECT_SUMMARY_PATCHED_JSON="$(curl -sS "$BASE/v1/projects/$PROJECT_ID/summary"
 [[ "$(jq -r '.overdue_task_count' <<<"$PROJECT_SUMMARY_PATCHED_JSON")" == "0" ]] || fail "project summary returned unexpected overdue count after patch"
 [[ "$(jq -r '.recent_activity_count' <<<"$PROJECT_SUMMARY_PATCHED_JSON")" == "2" ]] || fail "project summary returned unexpected recent activity count after patch"
 
+step "Create label, assign to task, and filter by label"
+LABEL_KEY="label-create-$(date +%s)-$RANDOM"
+LABEL_JSON="$(
+  curl -sS -X POST "$BASE/v1/labels" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -H "Idempotency-Key: $LABEL_KEY" \
+    -d '{"name":"Smoke label","color":"#FF8800"}'
+)"
+LABEL_ID="$(jq -er '.id' <<<"$LABEL_JSON")"
+[[ "$(jq -r '.color' <<<"$LABEL_JSON")" == "#ff8800" ]] || fail "label color was not normalized to lowercase"
+
+ASSIGN_JSON="$(
+  curl -sS -X PUT "$BASE/v1/tasks/$TASK_ID/labels" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"label_ids\":[\"$LABEL_ID\"]}"
+)"
+[[ "$(jq -r '.[0].name' <<<"$ASSIGN_JSON")" == "Smoke label" ]] || fail "label assignment did not return the label"
+
+LABEL_FILTER_JSON="$(curl -sS "$BASE/v1/tasks?label_id=$LABEL_ID" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.data[0].id' <<<"$LABEL_FILTER_JSON")" == "$TASK_ID" ]] || fail "label filter did not return the tagged task"
+
+TASK_LABELS_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/labels" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r 'length' <<<"$TASK_LABELS_JSON")" == "1" ]] || fail "task labels endpoint should list exactly one label"
+
 step "Verify task audit feed"
 AUDIT_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/audit?limit=10" -H "Authorization: Bearer $ACCESS_TOKEN")"
-[[ "$(jq -r '.data[0].event_type' <<<"$AUDIT_JSON")" == "task_updated" ]] || fail "task audit did not return the most recent update event first"
-[[ "$(jq -r '.data[1].event_type' <<<"$AUDIT_JSON")" == "task_created" ]] || fail "task audit did not include the create event"
+[[ "$(jq -r '.data[0].event_type' <<<"$AUDIT_JSON")" == "task_labels_updated" ]] || fail "task audit did not return the label assignment event first"
+jq -e '[.data[].event_type] | index("task_updated")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the update event"
+jq -e '[.data[].event_type] | index("task_created")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the create event"
 
 step "Verify dashboard summary"
 SUMMARY_JSON="$(curl -sS "$BASE/v1/dashboard/summary" -H "Authorization: Bearer $ACCESS_TOKEN")"
@@ -184,7 +211,7 @@ SUMMARY_JSON="$(curl -sS "$BASE/v1/dashboard/summary" -H "Authorization: Bearer 
 [[ "$(jq -r '.in_progress_task_count' <<<"$SUMMARY_JSON")" == "1" ]] || fail "dashboard summary returned unexpected in-progress task count"
 [[ "$(jq -r '.done_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected done task count"
 [[ "$(jq -r '.overdue_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected overdue task count"
-[[ "$(jq -r '.recent_activity_count' <<<"$SUMMARY_JSON")" == "2" ]] || fail "dashboard summary returned unexpected recent activity count"
+[[ "$(jq -r '.recent_activity_count' <<<"$SUMMARY_JSON")" == "3" ]] || fail "dashboard summary returned unexpected recent activity count"
 
 step "Create export job and wait for completion"
 EXPORT_KEY="task-export-$(date +%s)-$RANDOM"

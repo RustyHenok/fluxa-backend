@@ -1498,6 +1498,285 @@ async fn soft_delete_restore_idempotency_and_search() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn labels_management_and_task_filtering() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "labels-owner").await;
+    let member = register_user(&client, &server.http_base, "labels-member").await;
+
+    add_membership(&member.user_id, &owner.tenant_id, "member").await;
+    let switched: Value = client
+        .post(format!("{}/v1/auth/switch-tenant", server.http_base))
+        .bearer_auth(&member.access_token)
+        .json(&json!({ "tenant_id": owner.tenant_id }))
+        .send()
+        .await
+        .expect("switch tenant should return a response")
+        .json()
+        .await
+        .expect("switch tenant response should be json");
+    let member_access = switched["access_token"]
+        .as_str()
+        .expect("switch should include access token")
+        .to_string();
+
+    // Idempotent label creation replays the original response.
+    let label_key = format!("label-{}", uuid::Uuid::new_v4());
+    let mut bug_ids = Vec::new();
+    for _ in 0..2 {
+        let response = client
+            .post(format!("{}/v1/labels", server.http_base))
+            .bearer_auth(&owner.access_token)
+            .header("Idempotency-Key", &label_key)
+            .json(&json!({ "name": "Bug", "color": "#FF0000" }))
+            .send()
+            .await
+            .expect("label create should return a response");
+        assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+        let body: Value = response.json().await.expect("label should be json");
+        assert_eq!(
+            body["color"], "#ff0000",
+            "color should normalize to lowercase"
+        );
+        bug_ids.push(body["id"].as_str().expect("label id").to_string());
+    }
+    assert_eq!(bug_ids[0], bug_ids[1], "same key should replay the label");
+    let bug_id = bug_ids[0].clone();
+
+    let missing_key = client
+        .post(format!("{}/v1/labels", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "name": "No key" }))
+        .send()
+        .await
+        .expect("missing key request should return a response");
+    assert_eq!(missing_key.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let duplicate = client
+        .post(format!("{}/v1/labels", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .header("Idempotency-Key", format!("label-{}", uuid::Uuid::new_v4()))
+        .json(&json!({ "name": "bug" }))
+        .send()
+        .await
+        .expect("duplicate label create should return a response");
+    assert_eq!(
+        duplicate.status(),
+        reqwest::StatusCode::CONFLICT,
+        "label names should be unique per tenant, case-insensitively"
+    );
+
+    let bad_color = client
+        .post(format!("{}/v1/labels", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .header("Idempotency-Key", format!("label-{}", uuid::Uuid::new_v4()))
+        .json(&json!({ "name": "Ugly", "color": "red" }))
+        .send()
+        .await
+        .expect("invalid color create should return a response");
+    assert_eq!(bad_color.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let member_create = client
+        .post(format!("{}/v1/labels", server.http_base))
+        .bearer_auth(&member_access)
+        .header("Idempotency-Key", format!("label-{}", uuid::Uuid::new_v4()))
+        .json(&json!({ "name": "Member label" }))
+        .send()
+        .await
+        .expect("member label create should return a response");
+    assert_eq!(member_create.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let feature: Value = client
+        .post(format!("{}/v1/labels", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .header("Idempotency-Key", format!("label-{}", uuid::Uuid::new_v4()))
+        .json(&json!({ "name": "Feature" }))
+        .send()
+        .await
+        .expect("feature label create should return a response")
+        .json()
+        .await
+        .expect("feature label should be json");
+    let feature_id = feature["id"].as_str().expect("label id").to_string();
+
+    let listed: Value = client
+        .get(format!("{}/v1/labels", server.http_base))
+        .bearer_auth(&member_access)
+        .send()
+        .await
+        .expect("label list should return a response")
+        .json()
+        .await
+        .expect("label list should be json");
+    let names: Vec<&str> = listed
+        .as_array()
+        .expect("label list should be an array")
+        .iter()
+        .filter_map(|label| label["name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["Bug", "Feature"], "labels should sort by name");
+
+    // Members can attach labels; the set is replaced wholesale.
+    let task_one = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "Fix login crash",
+        "open",
+        "high",
+    )
+    .await;
+    let task_one_id = task_one["id"].as_str().expect("task id").to_string();
+    let task_two = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "Ship dark mode",
+        "open",
+        "medium",
+    )
+    .await;
+    let task_two_id = task_two["id"].as_str().expect("task id").to_string();
+
+    let assigned: Value = client
+        .put(format!(
+            "{}/v1/tasks/{}/labels",
+            server.http_base, task_one_id
+        ))
+        .bearer_auth(&member_access)
+        .json(&json!({ "label_ids": [bug_id] }))
+        .send()
+        .await
+        .expect("label assignment should return a response")
+        .json()
+        .await
+        .expect("label assignment should be json");
+    assert_eq!(assigned.as_array().map(Vec::len), Some(1));
+    assert_eq!(assigned[0]["name"], "Bug");
+
+    client
+        .put(format!(
+            "{}/v1/tasks/{}/labels",
+            server.http_base, task_two_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "label_ids": [bug_id, feature_id] }))
+        .send()
+        .await
+        .expect("second label assignment should return a response");
+
+    let unknown_label = client
+        .put(format!(
+            "{}/v1/tasks/{}/labels",
+            server.http_base, task_one_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "label_ids": [uuid::Uuid::new_v4()] }))
+        .send()
+        .await
+        .expect("unknown label assignment should return a response");
+    assert_eq!(unknown_label.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // label_id filters listings down to tagged tasks.
+    let filtered: Value = client
+        .get(format!(
+            "{}/v1/tasks?label_id={}",
+            server.http_base, feature_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("label filter should return a response")
+        .json()
+        .await
+        .expect("label filter should be json");
+    let filtered_ids: Vec<&str> = filtered["data"]
+        .as_array()
+        .expect("filtered data should be an array")
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert_eq!(
+        filtered_ids,
+        vec![task_two_id.as_str()],
+        "feature filter should only match the second task"
+    );
+
+    let bug_filtered: Value = client
+        .get(format!("{}/v1/tasks?label_id={}", server.http_base, bug_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("bug filter should return a response")
+        .json()
+        .await
+        .expect("bug filter should be json");
+    assert_eq!(
+        bug_filtered["data"].as_array().map(Vec::len),
+        Some(2),
+        "bug filter should match both tasks"
+    );
+
+    // Rename and recolor, then delete; deletion detaches the label everywhere.
+    let renamed: Value = client
+        .patch(format!("{}/v1/labels/{}", server.http_base, bug_id))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "name": "Defect", "color": "#00FF00" }))
+        .send()
+        .await
+        .expect("label rename should return a response")
+        .json()
+        .await
+        .expect("label rename should be json");
+    assert_eq!(renamed["name"], "Defect");
+    assert_eq!(renamed["color"], "#00ff00");
+
+    let member_delete = client
+        .delete(format!("{}/v1/labels/{}", server.http_base, feature_id))
+        .bearer_auth(&member_access)
+        .send()
+        .await
+        .expect("member label delete should return a response");
+    assert_eq!(member_delete.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let deleted = client
+        .delete(format!("{}/v1/labels/{}", server.http_base, feature_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("label delete should return a response");
+    assert_eq!(deleted.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let task_two_labels: Value = client
+        .get(format!(
+            "{}/v1/tasks/{}/labels",
+            server.http_base, task_two_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task labels should return a response")
+        .json()
+        .await
+        .expect("task labels should be json");
+    let remaining: Vec<&str> = task_two_labels
+        .as_array()
+        .expect("task labels should be an array")
+        .iter()
+        .filter_map(|label| label["name"].as_str())
+        .collect();
+    assert_eq!(
+        remaining,
+        vec!["Defect"],
+        "deleting a label should detach it from tasks"
+    );
+}
+
 fn sweep_notification_count(reply: &fluxa_backend::grpc::proto::JobReply) -> f64 {
     let payload = reply
         .result_payload
