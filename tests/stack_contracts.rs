@@ -1777,6 +1777,305 @@ async fn labels_management_and_task_filtering() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn task_comments_crud_permissions_and_notifications() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "comments-owner").await;
+    let member = register_user(&client, &server.http_base, "comments-member").await;
+
+    add_membership(&member.user_id, &owner.tenant_id, "member").await;
+    let switched: Value = client
+        .post(format!("{}/v1/auth/switch-tenant", server.http_base))
+        .bearer_auth(&member.access_token)
+        .json(&json!({ "tenant_id": owner.tenant_id }))
+        .send()
+        .await
+        .expect("switch tenant should return a response")
+        .json()
+        .await
+        .expect("switch tenant response should be json");
+    let member_access = switched["access_token"]
+        .as_str()
+        .expect("switch should include access token")
+        .to_string();
+
+    // Task owned by the owner, assigned to the owner so comments trigger a
+    // notification when someone else comments.
+    let task = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "Comment target",
+        "open",
+        "medium",
+    )
+    .await;
+    let task_id = task["id"].as_str().expect("task id").to_string();
+
+    let assign = client
+        .patch(format!("{}/v1/tasks/{}", server.http_base, task_id))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "assignee_id": owner.user_id }))
+        .send()
+        .await
+        .expect("assign task should return a response");
+    assert_eq!(assign.status(), reqwest::StatusCode::OK);
+
+    // Creating a comment requires an idempotency key.
+    let missing_key = client
+        .post(format!(
+            "{}/v1/tasks/{}/comments",
+            server.http_base, task_id
+        ))
+        .bearer_auth(&member_access)
+        .json(&json!({ "body": "no key" }))
+        .send()
+        .await
+        .expect("missing key comment should return a response");
+    assert_eq!(missing_key.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Empty bodies are rejected.
+    let empty_body = client
+        .post(format!(
+            "{}/v1/tasks/{}/comments",
+            server.http_base, task_id
+        ))
+        .bearer_auth(&member_access)
+        .header(
+            "Idempotency-Key",
+            format!("comment-{}", uuid::Uuid::new_v4()),
+        )
+        .json(&json!({ "body": "   " }))
+        .send()
+        .await
+        .expect("empty comment should return a response");
+    assert_eq!(empty_body.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Member comments; replaying the same key returns the same comment.
+    let comment_key = format!("comment-{}", uuid::Uuid::new_v4());
+    let mut member_comment_ids = Vec::new();
+    for _ in 0..2 {
+        let response = client
+            .post(format!(
+                "{}/v1/tasks/{}/comments",
+                server.http_base, task_id
+            ))
+            .bearer_auth(&member_access)
+            .header("Idempotency-Key", &comment_key)
+            .json(&json!({ "body": "  Needs review  " }))
+            .send()
+            .await
+            .expect("comment create should return a response");
+        assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+        let body: Value = response.json().await.expect("comment should be json");
+        assert_eq!(body["body"], "Needs review", "body should be trimmed");
+        assert_eq!(body["author_id"], member.user_id.as_str());
+        member_comment_ids.push(body["id"].as_str().expect("comment id").to_string());
+    }
+    assert_eq!(
+        member_comment_ids[0], member_comment_ids[1],
+        "same key should replay the comment"
+    );
+    let member_comment_id = member_comment_ids[0].clone();
+
+    // The assignee (owner) is notified about the member's comment.
+    assert_eq!(
+        count_notifications(&owner.email, "task_commented").await,
+        1,
+        "assignee should receive a comment notification"
+    );
+
+    // The owner commenting on their own assigned task does not notify anyone.
+    let owner_comment: Value = client
+        .post(format!(
+            "{}/v1/tasks/{}/comments",
+            server.http_base, task_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .header(
+            "Idempotency-Key",
+            format!("comment-{}", uuid::Uuid::new_v4()),
+        )
+        .json(&json!({ "body": "Owner reply" }))
+        .send()
+        .await
+        .expect("owner comment should return a response")
+        .json()
+        .await
+        .expect("owner comment should be json");
+    let owner_comment_id = owner_comment["id"]
+        .as_str()
+        .expect("owner comment id")
+        .to_string();
+    assert_eq!(
+        count_notifications(&owner.email, "task_commented").await,
+        1,
+        "self-comments should not enqueue notifications"
+    );
+
+    // Newest-first listing with keyset pagination.
+    let first_page: Value = client
+        .get(format!(
+            "{}/v1/tasks/{}/comments?limit=1",
+            server.http_base, task_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("comment list should return a response")
+        .json()
+        .await
+        .expect("comment list should be json");
+    let first_items = first_page["data"].as_array().expect("comment page array");
+    assert_eq!(first_items.len(), 1);
+    assert_eq!(
+        first_items[0]["id"],
+        owner_comment_id.as_str(),
+        "newest comment should come first"
+    );
+    let cursor = first_page["next_cursor"]
+        .as_str()
+        .expect("first page should include a cursor")
+        .to_string();
+
+    let second_page: Value = client
+        .get(format!(
+            "{}/v1/tasks/{}/comments?limit=1&cursor={}",
+            server.http_base, task_id, cursor
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("second comment page should return a response")
+        .json()
+        .await
+        .expect("second comment page should be json");
+    let second_items = second_page["data"].as_array().expect("comment page array");
+    assert_eq!(second_items.len(), 1);
+    assert_eq!(second_items[0]["id"], member_comment_id.as_str());
+    assert!(
+        second_page["next_cursor"].is_null(),
+        "final page should not include a cursor"
+    );
+
+    // Only the author can edit a comment.
+    let owner_edit = client
+        .patch(format!(
+            "{}/v1/tasks/{}/comments/{}",
+            server.http_base, task_id, member_comment_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "body": "hijacked" }))
+        .send()
+        .await
+        .expect("non-author edit should return a response");
+    assert_eq!(owner_edit.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let member_edit: Value = client
+        .patch(format!(
+            "{}/v1/tasks/{}/comments/{}",
+            server.http_base, task_id, member_comment_id
+        ))
+        .bearer_auth(&member_access)
+        .json(&json!({ "body": "Needs review by Friday" }))
+        .send()
+        .await
+        .expect("author edit should return a response")
+        .json()
+        .await
+        .expect("author edit should be json");
+    assert_eq!(member_edit["body"], "Needs review by Friday");
+
+    // A member cannot delete someone else's comment.
+    let member_delete = client
+        .delete(format!(
+            "{}/v1/tasks/{}/comments/{}",
+            server.http_base, task_id, owner_comment_id
+        ))
+        .bearer_auth(&member_access)
+        .send()
+        .await
+        .expect("member delete should return a response");
+    assert_eq!(member_delete.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // The owner can moderate (delete) the member's comment.
+    let owner_delete = client
+        .delete(format!(
+            "{}/v1/tasks/{}/comments/{}",
+            server.http_base, task_id, member_comment_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("owner delete should return a response");
+    assert_eq!(owner_delete.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let remaining: Value = client
+        .get(format!(
+            "{}/v1/tasks/{}/comments",
+            server.http_base, task_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("final comment list should return a response")
+        .json()
+        .await
+        .expect("final comment list should be json");
+    let remaining_ids: Vec<&str> = remaining["data"]
+        .as_array()
+        .expect("comment array")
+        .iter()
+        .filter_map(|comment| comment["id"].as_str())
+        .collect();
+    assert_eq!(remaining_ids, vec![owner_comment_id.as_str()]);
+
+    // Comment lifecycle shows up in the task audit feed.
+    let audit: Value = client
+        .get(format!(
+            "{}/v1/tasks/{}/audit?limit=10",
+            server.http_base, task_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task audit should return a response")
+        .json()
+        .await
+        .expect("task audit should be json");
+    let audit_events: Vec<&str> = audit["data"]
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .filter_map(|entry| entry["event_type"].as_str())
+        .collect();
+    assert_eq!(
+        audit_events[0], "task_comment_deleted",
+        "delete should be the newest audit event"
+    );
+    assert!(
+        audit_events.contains(&"task_comment_added"),
+        "audit feed should include comment additions"
+    );
+
+    // Comments on unknown tasks return 404.
+    let unknown = client
+        .get(format!(
+            "{}/v1/tasks/{}/comments",
+            server.http_base,
+            uuid::Uuid::new_v4()
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("unknown task comments should return a response");
+    assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
 fn sweep_notification_count(reply: &fluxa_backend::grpc::proto::JobReply) -> f64 {
     let payload = reply
         .result_payload
