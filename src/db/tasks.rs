@@ -577,6 +577,14 @@ fn apply_task_filters<'a>(
         builder.push_bind(assignee_id);
     }
 
+    if let Some(label_id) = filters.label_id {
+        builder.push(
+            " AND EXISTS (SELECT 1 FROM task_labels tl WHERE tl.task_id = tasks.id AND tl.label_id = ",
+        );
+        builder.push_bind(label_id);
+        builder.push(")");
+    }
+
     if let Some(due_before) = filters.due_before {
         builder.push(" AND due_at <= ");
         builder.push_bind(due_before);

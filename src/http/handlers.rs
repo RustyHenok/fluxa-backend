@@ -9,16 +9,18 @@ use uuid::Uuid;
 
 use crate::cache::StoredResponse;
 use crate::domain::{
-    CreateProjectInput, CreateTaskInput, DashboardSummary, InvitationResponse, JobResponse,
-    JobResultResponse, PaginatedAuditEvents, ProjectResponse, ProjectSummary, TaskAuditResponse,
-    TaskResponse, TenantMemberResponse, TenantMembershipResponse, UpdateProjectInput,
-    UpdateTaskInput, UserResponse, validate_role, validate_task_priority, validate_task_status,
+    CreateLabelInput, CreateProjectInput, CreateTaskInput, DashboardSummary, InvitationResponse,
+    JobResponse, JobResultResponse, LabelResponse, PaginatedAuditEvents, ProjectResponse,
+    ProjectSummary, TaskAuditResponse, TaskResponse, TenantMemberResponse,
+    TenantMembershipResponse, UpdateLabelInput, UpdateProjectInput, UpdateTaskInput, UserResponse,
+    validate_role, validate_task_priority, validate_task_status,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
     account as account_service, audit as audit_service, auth as auth_service, jobs as jobs_service,
-    memberships as membership_service, projects as project_service, tasks as task_service,
+    labels as label_service, memberships as membership_service, projects as project_service,
+    tasks as task_service,
 };
 use crate::state::AppState;
 use crate::storage::ArtifactStore;
@@ -27,11 +29,11 @@ use super::AuthenticatedUser;
 use super::dto::{
     AuditListQuery, AuthResponse, ChangeEmailPayload, ChangePasswordPayload, ExportRequest,
     HealthResponse, InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse,
-    LoginRequest, LogoutRequest, MeResponse, MemberRolePayload, PasswordResetConfirmPayload,
-    PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload, RefreshRequest,
-    RegisterRequest, ResendVerificationPayload, SwitchTenantRequest, TaskAuditListResponse,
-    TaskAuditQuery, TaskListQuery, TaskListResponse, TaskPatchPayload, TaskPayload,
-    VerifyEmailPayload,
+    LabelPatchPayload, LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
+    PasswordResetConfirmPayload, PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload,
+    RefreshRequest, RegisterRequest, ResendVerificationPayload, SwitchTenantRequest,
+    TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse,
+    TaskPatchPayload, TaskPayload, VerifyEmailPayload,
 };
 use super::helpers::{
     bearer_token, ensure_active_tenant, ensure_admin_role, ensure_task_write_role, normalize_email,
@@ -583,6 +585,126 @@ pub(super) async fn restore_project(
     let project =
         project_service::restore_project(&state, user.tenant_id, user.user_id, project_id).await?;
     Ok(Json(ProjectResponse::from(&project)))
+}
+
+pub(super) async fn list_labels(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<Vec<LabelResponse>>> {
+    let labels = label_service::list_labels(&state, user.tenant_id).await?;
+    Ok(Json(labels.iter().map(LabelResponse::from).collect()))
+}
+
+pub(super) async fn create_label(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+    Json(payload): Json<LabelPayload>,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    ensure_admin_role(user.role)?;
+    let input = CreateLabelInput {
+        name: payload.name,
+        color: payload.color,
+    }
+    .validate()?;
+
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(user.tenant_id, "labels:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match label_service::create_label(&state, user.tenant_id, user.user_id, input).await {
+        Ok(label) => {
+            let body = serde_json::to_value(LabelResponse::from(&label)).map_err(|error| {
+                AppError::internal(format!("failed to serialize label: {error}"))
+            })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn update_label(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(label_id): Path<Uuid>,
+    Json(payload): Json<LabelPatchPayload>,
+) -> AppResult<Json<LabelResponse>> {
+    ensure_admin_role(user.role)?;
+    let input = UpdateLabelInput {
+        name: payload.name,
+        color: payload.color,
+    }
+    .validate()?;
+
+    let label =
+        label_service::update_label(&state, user.tenant_id, label_id, user.user_id, input).await?;
+    Ok(Json(LabelResponse::from(&label)))
+}
+
+pub(super) async fn delete_label(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(label_id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    ensure_admin_role(user.role)?;
+    label_service::delete_label(&state, user.tenant_id, label_id, user.user_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn get_task_labels(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+) -> AppResult<Json<Vec<LabelResponse>>> {
+    let labels = label_service::list_task_labels(&state, user.tenant_id, task_id).await?;
+    Ok(Json(labels.iter().map(LabelResponse::from).collect()))
+}
+
+pub(super) async fn put_task_labels(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+    Json(payload): Json<TaskLabelsPayload>,
+) -> AppResult<Json<Vec<LabelResponse>>> {
+    ensure_task_write_role(user.role)?;
+    let labels = label_service::set_task_labels(
+        &state,
+        user.tenant_id,
+        task_id,
+        user.user_id,
+        payload.label_ids,
+    )
+    .await?;
+    Ok(Json(labels.iter().map(LabelResponse::from).collect()))
 }
 
 pub(super) async fn dashboard_summary(

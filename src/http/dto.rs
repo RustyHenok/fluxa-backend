@@ -93,6 +93,7 @@ pub(super) struct TaskListQuery {
     pub(super) priority: Option<String>,
     pub(super) project_id: Option<Uuid>,
     pub(super) assignee_id: Option<Uuid>,
+    pub(super) label_id: Option<Uuid>,
     pub(super) due_before: Option<String>,
     pub(super) due_after: Option<String>,
     pub(super) updated_after: Option<String>,
@@ -105,6 +106,7 @@ pub(super) struct ExportRequest {
     pub(super) priority: Option<String>,
     pub(super) project_id: Option<Uuid>,
     pub(super) assignee_id: Option<Uuid>,
+    pub(super) label_id: Option<Uuid>,
     pub(super) due_before: Option<String>,
     pub(super) due_after: Option<String>,
     pub(super) updated_after: Option<String>,
@@ -196,6 +198,23 @@ pub(super) struct ProjectPatchPayload {
     pub(super) description: Option<Option<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct LabelPayload {
+    pub(super) name: String,
+    pub(super) color: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(super) struct LabelPatchPayload {
+    pub(super) name: Option<String>,
+    pub(super) color: Option<Option<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct TaskLabelsPayload {
+    pub(super) label_ids: Vec<Uuid>,
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct HealthResponse<'a> {
     pub(super) status: &'a str,
@@ -212,6 +231,7 @@ impl TaskListQuery {
                 .transpose()?,
             project_id: self.project_id,
             assignee_id: self.assignee_id,
+            label_id: self.label_id,
             due_before: parse_optional_datetime(self.due_before, "due_before")?,
             due_after: parse_optional_datetime(self.due_after, "due_after")?,
             updated_after: parse_optional_datetime(self.updated_after, "updated_after")?,
@@ -239,6 +259,7 @@ impl ExportRequest {
                 .transpose()?,
             project_id: self.project_id,
             assignee_id: self.assignee_id,
+            label_id: self.label_id,
             due_before: parse_optional_datetime(self.due_before, "due_before")?,
             due_after: parse_optional_datetime(self.due_after, "due_after")?,
             updated_after: parse_optional_datetime(self.updated_after, "updated_after")?,

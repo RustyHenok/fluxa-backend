@@ -144,6 +144,7 @@ The following create endpoints require `Idempotency-Key`:
 - `POST /v1/exports/tasks`
 - `POST /v1/projects`
 - `POST /v1/tenants/:tenant_id/invitations`
+- `POST /v1/labels`
 
 Client expectation:
 
@@ -202,6 +203,12 @@ Client expectation:
 - `DELETE /v1/tasks/:task_id` (soft delete: sets status to `archived`)
 - `POST /v1/tasks/:task_id/restore`
 - `GET /v1/tasks/:task_id/audit`
+- `GET /v1/labels`
+- `POST /v1/labels` (owner/admin)
+- `PATCH /v1/labels/:label_id` (owner/admin)
+- `DELETE /v1/labels/:label_id` (owner/admin)
+- `GET /v1/tasks/:task_id/labels`
+- `PUT /v1/tasks/:task_id/labels` (replace the task's label set)
 
 ### Soft Delete Semantics
 
@@ -215,6 +222,14 @@ Client expectation:
 
 - the `q` filter on task listings uses full-text (web search) matching over title and description for terms of three or more characters — whole words, `"quoted phrases"`, and `-negation` work; matching is on complete words, not substrings
 - terms shorter than three characters fall back to case-insensitive substring matching
+
+### Labels
+
+- labels are tenant-scoped; names are unique per tenant (case-insensitive) and `color` is an optional `#rrggbb` hex value
+- creating, renaming, recoloring, and deleting labels requires `owner` or `admin`; any member can attach labels to tasks
+- `PUT /v1/tasks/:task_id/labels` replaces the task's full label set with `{ "label_ids": [...] }` and returns the resulting labels; sending `[]` clears them
+- deleting a label removes it from every task that carried it
+- task listings and exports accept a `label_id` filter that returns only tasks carrying that label
 
 ### Jobs / Exports
 

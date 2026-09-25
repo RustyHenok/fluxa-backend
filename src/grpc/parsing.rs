@@ -25,6 +25,7 @@ pub(super) fn filters_from_parts(
             .map_err(status_from_error)?,
         project_id: None,
         assignee_id,
+        label_id: None,
         due_before,
         due_after,
         updated_after,

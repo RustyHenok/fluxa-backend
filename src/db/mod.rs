@@ -1,6 +1,7 @@
 mod audit;
 mod invitations;
 mod jobs;
+mod labels;
 mod memberships;
 mod notifications;
 mod projects;

@@ -21,6 +21,7 @@ pub fn document() -> Value {
             { "name": "auth", "description": "Authentication and tenant session endpoints." },
             { "name": "tenants", "description": "Tenant-scoped membership endpoints." },
             { "name": "projects", "description": "Tenant-scoped project hierarchy endpoints." },
+            { "name": "labels", "description": "Tenant-scoped label management and task label assignment." },
             { "name": "tasks", "description": "Task CRUD, filtering, and audit endpoints." },
             { "name": "jobs", "description": "Background job creation, status, and results." },
             { "name": "account", "description": "Account lifecycle: email verification, password reset, credential changes." },
@@ -578,6 +579,7 @@ pub fn document() -> Value {
                         query_parameter("status", false, "Filter by task status.", schema_ref("TaskStatus")),
                         query_parameter("priority", false, "Filter by task priority.", schema_ref("TaskPriority")),
                         query_parameter("assignee_id", false, "Filter by assignee.", uuid_schema()),
+                        query_parameter("label_id", false, "Return only tasks carrying this label.", uuid_schema()),
                         query_parameter("due_before", false, "Return tasks due before this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("due_after", false, "Return tasks due after this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("updated_after", false, "Return tasks updated after this RFC3339 timestamp.", date_time_schema()),
@@ -588,6 +590,78 @@ pub fn document() -> Value {
                         "400": error_response("Invalid query parameters."),
                         "401": error_response("Authentication is required."),
                         "404": error_response("Project was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/labels": {
+                "get": {
+                    "tags": ["labels"],
+                    "operationId": "listLabels",
+                    "summary": "List tenant labels",
+                    "responses": {
+                        "200": {
+                            "description": "Tenant labels ordered by name.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("LabelResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["labels"],
+                    "operationId": "createLabel",
+                    "summary": "Create a label",
+                    "parameters": [
+                        idempotency_header_parameter()
+                    ],
+                    "requestBody": json_request_body(schema_ref("LabelPayload"), true),
+                    "responses": {
+                        "201": json_response("Label created.", schema_ref("LabelResponse")),
+                        "400": error_response("Invalid label payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage labels."),
+                        "409": error_response("A label with this name already exists."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/labels/{label_id}": {
+                "patch": {
+                    "tags": ["labels"],
+                    "operationId": "updateLabel",
+                    "summary": "Rename or recolor a label",
+                    "parameters": [
+                        path_uuid_parameter("label_id", "Label identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("LabelPatchPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated label detail.", schema_ref("LabelResponse")),
+                        "400": error_response("Invalid label patch payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage labels."),
+                        "404": error_response("Label was not found."),
+                        "409": error_response("A label with this name already exists."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["labels"],
+                    "operationId": "deleteLabel",
+                    "summary": "Delete a label",
+                    "description": "Deletes the label and removes it from every task that carried it.",
+                    "parameters": [
+                        path_uuid_parameter("label_id", "Label identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Label deleted."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage labels."),
+                        "404": error_response("Label was not found."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -604,6 +678,7 @@ pub fn document() -> Value {
                         query_parameter("priority", false, "Filter by task priority.", schema_ref("TaskPriority")),
                         query_parameter("project_id", false, "Filter by project.", uuid_schema()),
                         query_parameter("assignee_id", false, "Filter by assignee.", uuid_schema()),
+                        query_parameter("label_id", false, "Return only tasks carrying this label.", uuid_schema()),
                         query_parameter("due_before", false, "Return tasks due before this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("due_after", false, "Return tasks due after this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("updated_after", false, "Return tasks updated after this RFC3339 timestamp.", date_time_schema()),
@@ -697,6 +772,54 @@ pub fn document() -> Value {
                         "401": error_response("Authentication is required."),
                         "403": error_response("The active role cannot restore tasks."),
                         "404": error_response("No archived task with this identifier."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/labels": {
+                "get": {
+                    "tags": ["labels"],
+                    "operationId": "getTaskLabels",
+                    "summary": "List labels attached to a task",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Labels attached to the task, ordered by name.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("LabelResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Task was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "put": {
+                    "tags": ["labels"],
+                    "operationId": "setTaskLabels",
+                    "summary": "Replace the labels attached to a task",
+                    "description": "Replaces the full label set on the task with the provided label ids and returns the resulting labels.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("TaskLabelsPayload"), true),
+                    "responses": {
+                        "200": {
+                            "description": "Labels now attached to the task, ordered by name.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("LabelResponse"))
+                                }
+                            }
+                        },
+                        "400": error_response("Invalid label assignment payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot modify tasks."),
+                        "404": error_response("Task or one of the labels was not found."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -876,6 +999,59 @@ pub fn document() -> Value {
                         "email": string_schema(),
                         "role": schema_ref("MembershipRole"),
                         "joined_at": date_time_schema()
+                    }
+                },
+                "LabelPayload": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": string_schema(),
+                        "color": nullable(json!({
+                            "type": "string",
+                            "description": "Hex color like #4f46e5.",
+                            "pattern": "^#[0-9a-fA-F]{6}$"
+                        }))
+                    }
+                },
+                "LabelPatchPayload": {
+                    "type": "object",
+                    "properties": {
+                        "name": string_schema(),
+                        "color": nullable(json!({
+                            "type": "string",
+                            "description": "Hex color like #4f46e5. Send null to clear the color.",
+                            "pattern": "^#[0-9a-fA-F]{6}$"
+                        }))
+                    }
+                },
+                "LabelResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "tenant_id",
+                        "name",
+                        "color",
+                        "created_by",
+                        "updated_by",
+                        "created_at",
+                        "updated_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "tenant_id": uuid_schema(),
+                        "name": string_schema(),
+                        "color": nullable(string_schema()),
+                        "created_by": uuid_schema(),
+                        "updated_by": uuid_schema(),
+                        "created_at": date_time_schema(),
+                        "updated_at": date_time_schema()
+                    }
+                },
+                "TaskLabelsPayload": {
+                    "type": "object",
+                    "required": ["label_ids"],
+                    "properties": {
+                        "label_ids": array_schema(uuid_schema())
                     }
                 },
                 "ProjectPayload": {
@@ -1240,6 +1416,7 @@ pub fn document() -> Value {
                         "priority": schema_ref("TaskPriority"),
                         "project_id": uuid_schema(),
                         "assignee_id": uuid_schema(),
+                        "label_id": uuid_schema(),
                         "due_before": date_time_schema(),
                         "due_after": date_time_schema(),
                         "updated_after": date_time_schema(),
@@ -1254,6 +1431,7 @@ pub fn document() -> Value {
                         "priority": schema_ref("TaskPriority"),
                         "project_id": uuid_schema(),
                         "assignee_id": uuid_schema(),
+                        "label_id": uuid_schema(),
                         "due_before": date_time_schema(),
                         "due_after": date_time_schema(),
                         "updated_after": date_time_schema(),

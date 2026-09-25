@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod jobs;
+pub mod labels;
 pub mod notifications;
 pub mod projects;
 pub mod tasks;
@@ -14,6 +15,9 @@ pub use jobs::{
     BackgroundJobRecord, ExportFormat, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER,
     JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_RETENTION_SWEEP,
     JOB_TYPE_TASK_EXPORT, JobResponse, JobResultResponse, JobStatus, JobType,
+};
+pub use labels::{
+    CreateLabelInput, LabelRecord, LabelResponse, UpdateLabelInput, validate_task_label_ids,
 };
 pub use notifications::{
     AuditEventRecord, AuditEventResponse, NOTIFICATION_STATUS_DEAD_LETTER,
