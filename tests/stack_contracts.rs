@@ -2076,6 +2076,275 @@ async fn task_comments_crud_permissions_and_notifications() {
     assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn task_attachments_upload_download_and_delete() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "attachments-owner").await;
+    let member = register_user(&client, &server.http_base, "attachments-member").await;
+
+    add_membership(&member.user_id, &owner.tenant_id, "member").await;
+    let switched: Value = client
+        .post(format!("{}/v1/auth/switch-tenant", server.http_base))
+        .bearer_auth(&member.access_token)
+        .json(&json!({ "tenant_id": owner.tenant_id }))
+        .send()
+        .await
+        .expect("switch tenant should return a response")
+        .json()
+        .await
+        .expect("switch tenant response should be json");
+    let member_access = switched["access_token"]
+        .as_str()
+        .expect("switch should include access token")
+        .to_string();
+
+    let task = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "Attachment target",
+        "open",
+        "medium",
+    )
+    .await;
+    let task_id = task["id"].as_str().expect("task id").to_string();
+    let attachments_url = format!("{}/v1/tasks/{}/attachments", server.http_base, task_id);
+
+    // Uploads require an idempotency key.
+    let missing_key = client
+        .post(format!("{attachments_url}?file_name=notes.txt"))
+        .bearer_auth(&member_access)
+        .header("content-type", "text/plain")
+        .body("no key")
+        .send()
+        .await
+        .expect("missing key upload should return a response");
+    assert_eq!(missing_key.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Empty bodies are rejected.
+    let empty_body = client
+        .post(format!("{attachments_url}?file_name=notes.txt"))
+        .bearer_auth(&member_access)
+        .header(
+            "Idempotency-Key",
+            format!("attachment-{}", uuid::Uuid::new_v4()),
+        )
+        .send()
+        .await
+        .expect("empty upload should return a response");
+    assert_eq!(empty_body.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Unsafe file names are rejected.
+    let bad_name = client
+        .post(format!("{attachments_url}?file_name=a%2Fb.txt"))
+        .bearer_auth(&member_access)
+        .header(
+            "Idempotency-Key",
+            format!("attachment-{}", uuid::Uuid::new_v4()),
+        )
+        .body("content")
+        .send()
+        .await
+        .expect("bad file name upload should return a response");
+    assert_eq!(bad_name.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Oversized uploads are rejected (test server caps at 1024 bytes).
+    let oversize = client
+        .post(format!("{attachments_url}?file_name=big.bin"))
+        .bearer_auth(&member_access)
+        .header(
+            "Idempotency-Key",
+            format!("attachment-{}", uuid::Uuid::new_v4()),
+        )
+        .body(vec![0u8; 4096])
+        .send()
+        .await
+        .expect("oversize upload should return a response");
+    assert_eq!(oversize.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+
+    // Member uploads; replaying the same key returns the same attachment.
+    let attachment_body = "hello attachment content";
+    let upload_key = format!("attachment-{}", uuid::Uuid::new_v4());
+    let mut member_attachment_ids = Vec::new();
+    for _ in 0..2 {
+        let response = client
+            .post(format!("{attachments_url}?file_name=notes.txt"))
+            .bearer_auth(&member_access)
+            .header("Idempotency-Key", &upload_key)
+            .header("content-type", "text/plain")
+            .body(attachment_body)
+            .send()
+            .await
+            .expect("upload should return a response");
+        assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+        let body: Value = response.json().await.expect("attachment should be json");
+        assert_eq!(body["file_name"], "notes.txt");
+        assert_eq!(body["content_type"], "text/plain");
+        assert_eq!(body["size_bytes"], attachment_body.len() as i64);
+        assert_eq!(body["uploaded_by"], member.user_id.as_str());
+        member_attachment_ids.push(body["id"].as_str().expect("attachment id").to_string());
+    }
+    assert_eq!(
+        member_attachment_ids[0], member_attachment_ids[1],
+        "same key should replay the attachment"
+    );
+    let member_attachment_id = member_attachment_ids[0].clone();
+
+    // Download returns the original bytes with stored metadata.
+    let download = client
+        .get(format!("{attachments_url}/{member_attachment_id}/download"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("download should return a response");
+    assert_eq!(download.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        download
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/plain")
+    );
+    let disposition = download
+        .headers()
+        .get("content-disposition")
+        .and_then(|value| value.to_str().ok())
+        .expect("download should include content disposition")
+        .to_string();
+    assert!(disposition.contains("notes.txt"));
+    let downloaded = download.text().await.expect("download body should read");
+    assert_eq!(downloaded, attachment_body);
+
+    // Owner uploads a second attachment.
+    let owner_attachment: Value = client
+        .post(format!("{attachments_url}?file_name=spec.md"))
+        .bearer_auth(&owner.access_token)
+        .header(
+            "Idempotency-Key",
+            format!("attachment-{}", uuid::Uuid::new_v4()),
+        )
+        .header("content-type", "text/markdown")
+        .body("# spec")
+        .send()
+        .await
+        .expect("owner upload should return a response")
+        .json()
+        .await
+        .expect("owner upload should be json");
+    let owner_attachment_id = owner_attachment["id"]
+        .as_str()
+        .expect("owner attachment id")
+        .to_string();
+
+    // Listing is newest first and includes a download path.
+    let listed: Value = client
+        .get(&attachments_url)
+        .bearer_auth(&member_access)
+        .send()
+        .await
+        .expect("attachment list should return a response")
+        .json()
+        .await
+        .expect("attachment list should be json");
+    let items = listed.as_array().expect("attachment array");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["id"], owner_attachment_id.as_str());
+    assert_eq!(items[1]["id"], member_attachment_id.as_str());
+    assert_eq!(
+        items[1]["download_path"],
+        format!("/v1/tasks/{task_id}/attachments/{member_attachment_id}/download")
+    );
+
+    // A member cannot delete someone else's attachment.
+    let member_delete = client
+        .delete(format!("{attachments_url}/{owner_attachment_id}"))
+        .bearer_auth(&member_access)
+        .send()
+        .await
+        .expect("member delete should return a response");
+    assert_eq!(member_delete.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // The owner can moderate (delete) the member's attachment.
+    let owner_delete = client
+        .delete(format!("{attachments_url}/{member_attachment_id}"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("owner delete should return a response");
+    assert_eq!(owner_delete.status(), reqwest::StatusCode::NO_CONTENT);
+
+    // Deleted attachments are gone from listing and download.
+    let after_delete = client
+        .get(format!("{attachments_url}/{member_attachment_id}/download"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("deleted download should return a response");
+    assert_eq!(after_delete.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let remaining: Value = client
+        .get(&attachments_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("final attachment list should return a response")
+        .json()
+        .await
+        .expect("final attachment list should be json");
+    let remaining_ids: Vec<&str> = remaining
+        .as_array()
+        .expect("attachment array")
+        .iter()
+        .filter_map(|attachment| attachment["id"].as_str())
+        .collect();
+    assert_eq!(remaining_ids, vec![owner_attachment_id.as_str()]);
+
+    // Attachment lifecycle shows up in the task audit feed.
+    let audit: Value = client
+        .get(format!(
+            "{}/v1/tasks/{}/audit?limit=10",
+            server.http_base, task_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task audit should return a response")
+        .json()
+        .await
+        .expect("task audit should be json");
+    let audit_events: Vec<&str> = audit["data"]
+        .as_array()
+        .expect("audit array")
+        .iter()
+        .filter_map(|entry| entry["event_type"].as_str())
+        .collect();
+    assert_eq!(
+        audit_events[0], "task_attachment_deleted",
+        "delete should be the newest audit event"
+    );
+    assert!(
+        audit_events.contains(&"task_attachment_added"),
+        "audit feed should include attachment uploads"
+    );
+
+    // Attachments on unknown tasks return 404.
+    let unknown = client
+        .get(format!(
+            "{}/v1/tasks/{}/attachments",
+            server.http_base,
+            uuid::Uuid::new_v4()
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("unknown task attachments should return a response");
+    assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
 fn sweep_notification_count(reply: &fluxa_backend::grpc::proto::JobReply) -> f64 {
     let payload = reply
         .result_payload

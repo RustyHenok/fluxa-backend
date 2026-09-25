@@ -68,6 +68,7 @@ impl TestServer {
             .env("MAILER_PROVIDER", "log")
             .env("NOTIFY_DISPATCH_INTERVAL_MS", "250")
             .env("ARTIFACT_STORAGE_DIR", &artifact_dir)
+            .env("MAX_ATTACHMENT_SIZE_BYTES", "1024")
             .env("HTTP_ADDR", format!("127.0.0.1:{http_port}"))
             .env("GRPC_ADDR", format!("127.0.0.1:{grpc_port}"))
             .env("STARTUP_MAX_RETRIES", "10")

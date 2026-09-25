@@ -223,9 +223,29 @@ COMMENT_PATCH_JSON="$(
 )"
 [[ "$(jq -r '.body' <<<"$COMMENT_PATCH_JSON")" == "Smoke comment (edited)" ]] || fail "comment edit did not update the body"
 
+step "Upload, list, and download a task attachment"
+ATTACHMENT_KEY="attachment-create-$(date +%s)-$RANDOM"
+ATTACHMENT_FILE="$(mktemp)"
+printf 'smoke attachment payload' > "$ATTACHMENT_FILE"
+ATTACHMENT_JSON="$(
+  curl -sS -X POST "$BASE/v1/tasks/$TASK_ID/attachments?file_name=smoke.txt" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: $ATTACHMENT_KEY" \
+    -H 'content-type: text/plain' \
+    --data-binary @"$ATTACHMENT_FILE"
+)"
+ATTACHMENT_ID="$(jq -er '.id' <<<"$ATTACHMENT_JSON")" || fail "attachment upload did not return an id"
+[[ "$(jq -r '.file_name' <<<"$ATTACHMENT_JSON")" == "smoke.txt" ]] || fail "attachment upload returned unexpected file name"
+ATTACHMENT_LIST_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/attachments" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r 'length' <<<"$ATTACHMENT_LIST_JSON")" == "1" ]] || fail "attachment list should contain exactly one attachment"
+ATTACHMENT_DOWNLOAD="$(curl -sS "$BASE/v1/tasks/$TASK_ID/attachments/$ATTACHMENT_ID/download" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$ATTACHMENT_DOWNLOAD" == "smoke attachment payload" ]] || fail "attachment download did not round-trip the content"
+rm -f "$ATTACHMENT_FILE"
+
 step "Verify task audit feed"
 AUDIT_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/audit?limit=10" -H "Authorization: Bearer $ACCESS_TOKEN")"
-[[ "$(jq -r '.data[0].event_type' <<<"$AUDIT_JSON")" == "task_comment_added" ]] || fail "task audit did not return the comment event first"
+[[ "$(jq -r '.data[0].event_type' <<<"$AUDIT_JSON")" == "task_attachment_added" ]] || fail "task audit did not return the attachment event first"
+jq -e '[.data[].event_type] | index("task_comment_added")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the comment event"
 jq -e '[.data[].event_type] | index("task_labels_updated")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the label assignment event"
 jq -e '[.data[].event_type] | index("task_updated")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the update event"
 jq -e '[.data[].event_type] | index("task_created")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the create event"
@@ -236,7 +256,7 @@ SUMMARY_JSON="$(curl -sS "$BASE/v1/dashboard/summary" -H "Authorization: Bearer 
 [[ "$(jq -r '.in_progress_task_count' <<<"$SUMMARY_JSON")" == "1" ]] || fail "dashboard summary returned unexpected in-progress task count"
 [[ "$(jq -r '.done_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected done task count"
 [[ "$(jq -r '.overdue_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected overdue task count"
-[[ "$(jq -r '.recent_activity_count' <<<"$SUMMARY_JSON")" == "4" ]] || fail "dashboard summary returned unexpected recent activity count"
+[[ "$(jq -r '.recent_activity_count' <<<"$SUMMARY_JSON")" == "5" ]] || fail "dashboard summary returned unexpected recent activity count"
 
 step "Create export job and wait for completion"
 EXPORT_KEY="task-export-$(date +%s)-$RANDOM"
