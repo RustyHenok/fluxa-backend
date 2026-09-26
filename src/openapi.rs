@@ -711,6 +711,23 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/tasks/bulk/status": {
+                "post": {
+                    "tags": ["tasks"],
+                    "operationId": "bulkUpdateTaskStatus",
+                    "summary": "Update the status of multiple tasks",
+                    "description": "Sets the same status on up to 100 tasks in a single all-or-nothing transaction. Duplicate ids are ignored. If any task id is unknown to the tenant, no task is updated and 404 is returned.",
+                    "requestBody": json_request_body(schema_ref("BulkTaskStatusPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated tasks in request order.", schema_ref("BulkTaskStatusResponse")),
+                        "400": error_response("Invalid payload, empty id list, or more than 100 unique ids."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot update tasks."),
+                        "404": error_response("One or more tasks were not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/tasks/{task_id}": {
                 "get": {
                     "tags": ["tasks"],
@@ -1592,6 +1609,28 @@ pub fn document() -> Value {
                         "priority": schema_ref("TaskPriority"),
                         "assignee_id": nullable(uuid_schema()),
                         "due_at": nullable(date_time_schema())
+                    }
+                },
+                "BulkTaskStatusPayload": {
+                    "type": "object",
+                    "required": ["task_ids", "status"],
+                    "properties": {
+                        "task_ids": {
+                            "type": "array",
+                            "items": uuid_schema(),
+                            "minItems": 1,
+                            "maxItems": 100,
+                            "description": "Task ids to update. Duplicates are ignored; at most 100 unique ids per request."
+                        },
+                        "status": schema_ref("TaskStatus")
+                    }
+                },
+                "BulkTaskStatusResponse": {
+                    "type": "object",
+                    "required": ["updated", "data"],
+                    "properties": {
+                        "updated": { "type": "integer", "minimum": 0, "description": "Number of tasks updated." },
+                        "data": array_schema(schema_ref("TaskResponse"))
                     }
                 },
                 "TaskResponse": {

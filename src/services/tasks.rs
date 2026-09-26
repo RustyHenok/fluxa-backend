@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::domain::{
     CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TaskFilters, TaskRecord,
-    TaskResponse, UpdateTaskInput,
+    TaskResponse, TaskStatus, UpdateTaskInput, normalize_bulk_task_ids,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
@@ -145,6 +146,30 @@ pub async fn update_task(
         .await?;
     state.cache.bump_tenant_cache_version(tenant_id).await?;
     Ok(task)
+}
+
+pub async fn bulk_update_task_status(
+    state: &AppState,
+    tenant_id: Uuid,
+    actor_id: Uuid,
+    task_ids: Vec<Uuid>,
+    status: TaskStatus,
+) -> AppResult<Vec<TaskRecord>> {
+    let task_ids = normalize_bulk_task_ids(task_ids)?;
+    let mut tasks = state
+        .db
+        .bulk_update_task_status(tenant_id, actor_id, &task_ids, status)
+        .await?;
+    state.cache.bump_tenant_cache_version(tenant_id).await?;
+
+    // Return records in the order the ids were requested.
+    let positions: HashMap<Uuid, usize> = task_ids
+        .iter()
+        .enumerate()
+        .map(|(index, task_id)| (*task_id, index))
+        .collect();
+    tasks.sort_by_key(|task| positions.get(&task.id).copied().unwrap_or(usize::MAX));
+    Ok(tasks)
 }
 
 pub async fn archive_task(

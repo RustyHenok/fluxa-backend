@@ -33,10 +33,11 @@ use crate::storage::ArtifactStore;
 
 use super::AuthenticatedUser;
 use super::dto::{
-    AttachmentUploadQuery, AuditListQuery, AuthResponse, ChangeEmailPayload, ChangePasswordPayload,
-    CommentListQuery, CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest,
-    HealthResponse, InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse,
-    LabelPatchPayload, LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
+    AttachmentUploadQuery, AuditListQuery, AuthResponse, BulkTaskStatusPayload,
+    BulkTaskStatusResponse, ChangeEmailPayload, ChangePasswordPayload, CommentListQuery,
+    CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest, HealthResponse,
+    InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse, LabelPatchPayload,
+    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
     PasswordResetConfirmPayload, PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload,
     RefreshRequest, RegisterRequest, ResendVerificationPayload, SwitchTenantRequest,
     TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse,
@@ -1125,6 +1126,31 @@ pub(super) async fn update_task(
     let task =
         task_service::update_task(&state, user.tenant_id, task_id, user.user_id, input).await?;
     Ok(Json(TaskResponse::try_from(&task)?))
+}
+
+pub(super) async fn bulk_update_task_status(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<BulkTaskStatusPayload>,
+) -> AppResult<Json<BulkTaskStatusResponse>> {
+    ensure_task_write_role(user.role)?;
+    let status = validate_task_status(payload.status.trim())?;
+    let tasks = task_service::bulk_update_task_status(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        payload.task_ids,
+        status,
+    )
+    .await?;
+
+    Ok(Json(BulkTaskStatusResponse {
+        updated: tasks.len(),
+        data: tasks
+            .iter()
+            .map(TaskResponse::try_from)
+            .collect::<AppResult<Vec<_>>>()?,
+    }))
 }
 
 pub(super) async fn delete_task(

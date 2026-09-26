@@ -135,6 +135,10 @@ fn router(state: AppState) -> AppResult<Router> {
             get(handlers::list_tasks).post(handlers::create_task),
         )
         .route(
+            "/tasks/bulk/status",
+            post(handlers::bulk_update_task_status),
+        )
+        .route(
             "/tasks/:task_id",
             get(handlers::get_task)
                 .patch(handlers::update_task)

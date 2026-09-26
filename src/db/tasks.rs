@@ -332,6 +332,56 @@ impl Database {
         Ok(task)
     }
 
+    pub async fn bulk_update_task_status(
+        &self,
+        tenant_id: Uuid,
+        actor_id: Uuid,
+        task_ids: &[Uuid],
+        status: TaskStatus,
+    ) -> AppResult<Vec<TaskRecord>> {
+        let now = Utc::now();
+        let mut tx = self.pool.begin().await?;
+        let tasks = sqlx::query_as::<_, TaskRecord>(
+            r#"
+            UPDATE tasks
+            SET status = $1, updated_by = $2, updated_at = $3
+            WHERE tenant_id = $4 AND id = ANY($5)
+            RETURNING id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
+                      created_by, updated_by, created_at, updated_at
+            "#,
+        )
+        .bind(status.as_str())
+        .bind(actor_id)
+        .bind(now)
+        .bind(tenant_id)
+        .bind(task_ids)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        if tasks.len() != task_ids.len() {
+            return Err(AppError::NotFound(
+                "one or more tasks were not found".into(),
+            ));
+        }
+
+        let mut audit_builder = QueryBuilder::<Postgres>::new(
+            "INSERT INTO task_audit_log (id, task_id, tenant_id, actor_user_id, event_type, payload, created_at) ",
+        );
+        audit_builder.push_values(tasks.iter(), |mut row, task| {
+            row.push_bind(Uuid::new_v4())
+                .push_bind(task.id)
+                .push_bind(tenant_id)
+                .push_bind(actor_id)
+                .push_bind("task_status_updated")
+                .push_bind(json!({ "status": status }))
+                .push_bind(now);
+        });
+        audit_builder.build().execute(&mut *tx).await?;
+
+        tx.commit().await?;
+        Ok(tasks)
+    }
+
     pub async fn archive_task(
         &self,
         tenant_id: Uuid,

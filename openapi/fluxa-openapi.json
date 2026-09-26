@@ -134,6 +134,48 @@
         ],
         "type": "object"
       },
+      "BulkTaskStatusPayload": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "task_ids": {
+            "description": "Task ids to update. Duplicates are ignored; at most 100 unique ids per request.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "task_ids",
+          "status"
+        ],
+        "type": "object"
+      },
+      "BulkTaskStatusResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/TaskResponse"
+            },
+            "type": "array"
+          },
+          "updated": {
+            "description": "Number of tasks updated.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated",
+          "data"
+        ],
+        "type": "object"
+      },
       "ChangeEmailPayload": {
         "properties": {
           "current_password": {
@@ -3960,6 +4002,88 @@
           }
         },
         "summary": "Create a task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/v1/tasks/bulk/status": {
+      "post": {
+        "description": "Sets the same status on up to 100 tasks in a single all-or-nothing transaction. Duplicate ids are ignored. If any task id is unknown to the tenant, no task is updated and 404 is returned.",
+        "operationId": "bulkUpdateTaskStatus",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkTaskStatusPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkTaskStatusResponse"
+                }
+              }
+            },
+            "description": "Updated tasks in request order."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid payload, empty id list, or more than 100 unique ids."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The active role cannot update tasks."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "One or more tasks were not found."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Update the status of multiple tasks",
         "tags": [
           "tasks"
         ]

@@ -19,6 +19,8 @@ pub const TASK_PRIORITY_MEDIUM: &str = "medium";
 pub const TASK_PRIORITY_HIGH: &str = "high";
 pub const TASK_PRIORITY_URGENT: &str = "urgent";
 
+pub const MAX_BULK_TASK_IDS: usize = 100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
@@ -105,6 +107,30 @@ impl FromStr for TaskPriority {
 
 pub fn validate_task_status(value: &str) -> AppResult<TaskStatus> {
     value.parse()
+}
+
+/// Deduplicates bulk task ids while preserving their first-seen order and
+/// enforcing the non-empty and maximum-size constraints.
+pub fn normalize_bulk_task_ids(task_ids: Vec<Uuid>) -> AppResult<Vec<Uuid>> {
+    let mut seen = std::collections::HashSet::with_capacity(task_ids.len());
+    let deduped: Vec<Uuid> = task_ids
+        .into_iter()
+        .filter(|task_id| seen.insert(*task_id))
+        .collect();
+
+    if deduped.is_empty() {
+        return Err(AppError::Validation(
+            "task_ids must contain at least one task id".into(),
+        ));
+    }
+
+    if deduped.len() > MAX_BULK_TASK_IDS {
+        return Err(AppError::Validation(format!(
+            "task_ids may contain at most {MAX_BULK_TASK_IDS} unique task ids"
+        )));
+    }
+
+    Ok(deduped)
 }
 
 pub fn validate_task_priority(value: &str) -> AppResult<TaskPriority> {
@@ -317,5 +343,27 @@ impl From<&TaskAuditRecord> for TaskAuditResponse {
             payload: value.payload.clone(),
             created_at: value.created_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bulk_task_ids_are_deduplicated_in_order() {
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let normalized =
+            normalize_bulk_task_ids(vec![first, second, first]).expect("ids should normalize");
+        assert_eq!(normalized, vec![first, second]);
+    }
+
+    #[test]
+    fn bulk_task_ids_reject_empty_and_oversized_lists() {
+        assert!(normalize_bulk_task_ids(Vec::new()).is_err());
+
+        let oversized: Vec<Uuid> = (0..=MAX_BULK_TASK_IDS).map(|_| Uuid::new_v4()).collect();
+        assert!(normalize_bulk_task_ids(oversized).is_err());
     }
 }

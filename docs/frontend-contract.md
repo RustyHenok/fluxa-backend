@@ -200,6 +200,7 @@ Client expectation:
 - `GET /v1/projects/:project_id/tasks`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
+- `POST /v1/tasks/bulk/status` (updates up to 100 tasks atomically; returns `{ "updated": n, "data": [...] }`)
 - `GET /v1/tasks/:task_id`
 - `PATCH /v1/tasks/:task_id`
 - `DELETE /v1/tasks/:task_id` (soft delete: sets status to `archived`)
@@ -219,6 +220,13 @@ Client expectation:
 - `POST /v1/tasks/:task_id/attachments` (raw body upload with `?file_name=`)
 - `GET /v1/tasks/:task_id/attachments/:attachment_id/download`
 - `DELETE /v1/tasks/:task_id/attachments/:attachment_id` (uploader or owner/admin)
+
+### Bulk Status Updates
+
+- `POST /v1/tasks/bulk/status` accepts `{ "task_ids": [...], "status": "done" }` and sets the same status on every task in one transaction
+- duplicate ids are ignored; after deduplication the list must contain 1–100 ids, otherwise the API responds `400`
+- the update is all-or-nothing: if any id does not belong to a task in the active tenant, nothing is updated and the API responds `404`
+- the response is `{ "updated": n, "data": [TaskResponse...] }` with tasks in the same order as the request ids, and each task gains a `task_status_updated` audit entry
 
 ### Soft Delete Semantics
 

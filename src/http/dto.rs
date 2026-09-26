@@ -86,6 +86,18 @@ pub(super) struct TaskPatchPayload {
     pub(super) due_at: Option<Option<DateTime<Utc>>>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct BulkTaskStatusPayload {
+    pub(super) task_ids: Vec<Uuid>,
+    pub(super) status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct BulkTaskStatusResponse {
+    pub(super) updated: usize,
+    pub(super) data: Vec<TaskResponse>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub(super) struct TaskListQuery {
     pub(super) limit: Option<usize>,

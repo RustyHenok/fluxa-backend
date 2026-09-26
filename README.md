@@ -16,6 +16,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - Tenant-scoped task labels with per-label task filtering
 - Task comments with author-only edits, moderated deletes, and assignee notifications
 - Task file attachments stored through the artifact storage layer with size and per-task limits
+- Bulk task status updates for up to 100 tasks in one atomic request
 
 ## Main endpoints
 
@@ -51,6 +52,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - `GET /v1/projects/:project_id/tasks`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
+- `POST /v1/tasks/bulk/status`
 - `GET /v1/tasks/:task_id`
 - `GET /v1/tasks/:task_id/audit`
 - `PATCH /v1/tasks/:task_id`
