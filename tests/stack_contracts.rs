@@ -2535,6 +2535,361 @@ async fn bulk_task_status_updates_are_atomic() {
     assert_eq!(newest["payload"]["status"], "done");
 }
 
+type RecordedDelivery = (std::collections::HashMap<String, String>, Vec<u8>);
+
+#[derive(Clone, Default)]
+struct WebhookReceiver {
+    hits: std::sync::Arc<std::sync::Mutex<Vec<RecordedDelivery>>>,
+    fail: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+async fn webhook_receiver_hook(
+    axum::extract::State(state): axum::extract::State<WebhookReceiver>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::http::StatusCode {
+    let mut recorded = std::collections::HashMap::new();
+    for (name, value) in headers.iter() {
+        recorded.insert(
+            name.as_str().to_string(),
+            value.to_str().unwrap_or_default().to_string(),
+        );
+    }
+    state
+        .hits
+        .lock()
+        .expect("receiver mutex should not be poisoned")
+        .push((recorded, body.to_vec()));
+    if state.fail.load(std::sync::atomic::Ordering::SeqCst) {
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        axum::http::StatusCode::OK
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn webhooks_sign_and_deliver_task_events() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "webhook-owner").await;
+    let helper = register_user(&client, &server.http_base, "webhook-member").await;
+
+    add_membership(&helper.user_id, &owner.tenant_id, "member").await;
+    let switched: Value = client
+        .post(format!("{}/v1/auth/switch-tenant", server.http_base))
+        .bearer_auth(&helper.access_token)
+        .json(&json!({ "tenant_id": owner.tenant_id }))
+        .send()
+        .await
+        .expect("switch-tenant should return a response")
+        .json()
+        .await
+        .expect("switch-tenant response should be json");
+    let member_token = switched["access_token"]
+        .as_str()
+        .expect("switch-tenant should return an access token")
+        .to_string();
+
+    // Local receiver that records signed deliveries.
+    let receiver = WebhookReceiver::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("receiver listener should bind");
+    let receiver_addr = listener
+        .local_addr()
+        .expect("receiver listener should expose its address");
+    let app = axum::Router::new()
+        .route("/hook", axum::routing::post(webhook_receiver_hook))
+        .with_state(receiver.clone());
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("receiver server should run");
+    });
+    let hook_url = format!("http://{receiver_addr}/hook");
+    let webhooks_url = format!("{}/v1/webhooks", server.http_base);
+
+    // Members cannot manage webhooks.
+    let member_create = client
+        .post(&webhooks_url)
+        .bearer_auth(&member_token)
+        .header("Idempotency-Key", format!("wh-{}", uuid::Uuid::new_v4()))
+        .json(&json!({ "url": hook_url, "events": ["task_created"] }))
+        .send()
+        .await
+        .expect("member webhook create should return a response");
+    assert_eq!(member_create.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // Idempotency key is required.
+    let missing_key = client
+        .post(&webhooks_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "url": hook_url, "events": ["task_created"] }))
+        .send()
+        .await
+        .expect("keyless webhook create should return a response");
+    assert_eq!(missing_key.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Unsupported schemes and unknown events are rejected.
+    let bad_url = client
+        .post(&webhooks_url)
+        .bearer_auth(&owner.access_token)
+        .header("Idempotency-Key", format!("wh-{}", uuid::Uuid::new_v4()))
+        .json(&json!({ "url": "ftp://example.com/hook", "events": ["task_created"] }))
+        .send()
+        .await
+        .expect("bad scheme webhook create should return a response");
+    assert_eq!(bad_url.status(), reqwest::StatusCode::BAD_REQUEST);
+    let bad_event = client
+        .post(&webhooks_url)
+        .bearer_auth(&owner.access_token)
+        .header("Idempotency-Key", format!("wh-{}", uuid::Uuid::new_v4()))
+        .json(&json!({ "url": hook_url, "events": ["task_exploded"] }))
+        .send()
+        .await
+        .expect("bad event webhook create should return a response");
+    assert_eq!(bad_event.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Create a webhook; the secret is returned exactly once.
+    let create_key = format!("wh-{}", uuid::Uuid::new_v4());
+    let created = client
+        .post(&webhooks_url)
+        .bearer_auth(&owner.access_token)
+        .header("Idempotency-Key", &create_key)
+        .json(&json!({
+            "url": hook_url,
+            "events": ["task_created", "task_status_updated"],
+        }))
+        .send()
+        .await
+        .expect("webhook create should return a response");
+    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+    let created_body: Value = created.json().await.expect("webhook create should be json");
+    let webhook_id = created_body["webhook"]["id"]
+        .as_str()
+        .expect("webhook create should include id")
+        .to_string();
+    let secret = created_body["secret"]
+        .as_str()
+        .expect("webhook create should include the signing secret")
+        .to_string();
+    assert!(!secret.is_empty());
+    assert!(created_body["webhook"].get("secret").is_none());
+
+    // Replaying the same idempotency key returns the same webhook.
+    let replayed: Value = client
+        .post(&webhooks_url)
+        .bearer_auth(&owner.access_token)
+        .header("Idempotency-Key", &create_key)
+        .json(&json!({
+            "url": hook_url,
+            "events": ["task_created", "task_status_updated"],
+        }))
+        .send()
+        .await
+        .expect("webhook replay should return a response")
+        .json()
+        .await
+        .expect("webhook replay should be json");
+    assert_eq!(replayed["webhook"]["id"], webhook_id.as_str());
+
+    // Listing shows one webhook and never leaks the secret.
+    let listed: Value = client
+        .get(&webhooks_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("webhook list should return a response")
+        .json()
+        .await
+        .expect("webhook list should be json");
+    let listed_hooks = listed.as_array().expect("webhook list should be an array");
+    assert_eq!(listed_hooks.len(), 1);
+    assert!(listed_hooks[0].get("secret").is_none());
+
+    // A subscribed event is delivered with a verifiable signature.
+    let task = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "Webhook signal",
+        "open",
+        "medium",
+    )
+    .await;
+    let task_id = task["id"].as_str().expect("task id").to_string();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let first_hit = loop {
+        {
+            let hits = receiver
+                .hits
+                .lock()
+                .expect("receiver mutex should not be poisoned");
+            if let Some(hit) = hits.first() {
+                break hit.clone();
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "webhook delivery should arrive before the deadline"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    };
+    let (headers, body) = first_hit;
+    assert_eq!(
+        headers.get("x-fluxa-event").map(String::as_str),
+        Some("task_created")
+    );
+    let delivery_id = headers
+        .get("x-fluxa-delivery")
+        .expect("delivery header should be present");
+    uuid::Uuid::parse_str(delivery_id).expect("delivery id should be a uuid");
+    let expected_signature = fluxa_backend::domain::webhook_signature(&secret, &body);
+    assert_eq!(
+        headers.get("x-fluxa-signature").map(String::as_str),
+        Some(expected_signature.as_str())
+    );
+    let delivered_payload: Value =
+        serde_json::from_slice(&body).expect("delivery body should be json");
+    assert_eq!(delivered_payload["event"], "task_created");
+    assert_eq!(delivered_payload["data"]["id"], task_id.as_str());
+    assert_eq!(delivered_payload["data"]["title"], "Webhook signal");
+
+    // Unsubscribed events do not enqueue deliveries.
+    let patched = client
+        .patch(format!("{}/v1/tasks/{task_id}", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "title": "Webhook signal renamed" }))
+        .send()
+        .await
+        .expect("task patch should return a response");
+    assert_eq!(patched.status(), reqwest::StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    assert_eq!(
+        receiver
+            .hits
+            .lock()
+            .expect("receiver mutex should not be poisoned")
+            .len(),
+        1,
+        "unsubscribed events must not be delivered"
+    );
+
+    // Failed deliveries are retried until the receiver recovers.
+    receiver
+        .fail
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let bulk = client
+        .post(format!("{}/v1/tasks/bulk/status", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "task_ids": [task_id], "status": "done" }))
+        .send()
+        .await
+        .expect("bulk update should return a response");
+    assert_eq!(bulk.status(), reqwest::StatusCode::OK);
+
+    let deliveries_url = format!("{webhooks_url}/{webhook_id}/deliveries");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let page: Value = client
+            .get(&deliveries_url)
+            .bearer_auth(&owner.access_token)
+            .send()
+            .await
+            .expect("deliveries list should return a response")
+            .json()
+            .await
+            .expect("deliveries list should be json");
+        let rows = page["data"].as_array().expect("deliveries data array");
+        let failed_attempt = rows.iter().any(|row| {
+            row["event_type"] == "task_status_updated"
+                && row["status"] == "pending"
+                && row["attempts"].as_i64().unwrap_or_default() >= 1
+                && row["last_error"].is_string()
+        });
+        if failed_attempt {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "failed delivery should surface a retryable pending row"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    receiver
+        .fail
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let page: Value = client
+            .get(&deliveries_url)
+            .bearer_auth(&owner.access_token)
+            .send()
+            .await
+            .expect("deliveries list should return a response")
+            .json()
+            .await
+            .expect("deliveries list should be json");
+        let rows = page["data"].as_array().expect("deliveries data array");
+        let recovered = rows
+            .iter()
+            .any(|row| row["event_type"] == "task_status_updated" && row["status"] == "delivered");
+        if recovered {
+            assert!(rows.iter().any(|row| {
+                row["event_type"] == "task_created" && row["status"] == "delivered"
+            }));
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "failed delivery should be retried and delivered after recovery"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+
+    // Members cannot read delivery history.
+    let member_deliveries = client
+        .get(&deliveries_url)
+        .bearer_auth(&member_token)
+        .send()
+        .await
+        .expect("member deliveries list should return a response");
+    assert_eq!(member_deliveries.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // Disable, then delete the webhook.
+    let disabled: Value = client
+        .patch(format!("{webhooks_url}/{webhook_id}"))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "is_active": false }))
+        .send()
+        .await
+        .expect("webhook patch should return a response")
+        .json()
+        .await
+        .expect("webhook patch should be json");
+    assert_eq!(disabled["is_active"], false);
+
+    let deleted = client
+        .delete(format!("{webhooks_url}/{webhook_id}"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("webhook delete should return a response");
+    assert_eq!(deleted.status(), reqwest::StatusCode::NO_CONTENT);
+    let missing = client
+        .get(&deliveries_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("deliveries list after delete should return a response");
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
 fn sweep_notification_count(reply: &fluxa_backend::grpc::proto::JobReply) -> f64 {
     let payload = reply
         .result_payload

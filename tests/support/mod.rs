@@ -67,6 +67,8 @@ impl TestServer {
             .env("SAMPLER_INTERVAL_MS", "500")
             .env("MAILER_PROVIDER", "log")
             .env("NOTIFY_DISPATCH_INTERVAL_MS", "250")
+            .env("WEBHOOK_DISPATCH_INTERVAL_MS", "250")
+            .env("WEBHOOK_ALLOW_PRIVATE_URLS", "true")
             .env("ARTIFACT_STORAGE_DIR", &artifact_dir)
             .env("MAX_ATTACHMENT_SIZE_BYTES", "1024")
             .env("HTTP_ADDR", format!("127.0.0.1:{http_port}"))
