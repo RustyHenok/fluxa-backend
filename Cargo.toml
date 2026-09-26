@@ -19,6 +19,9 @@ lettre = { version = "0.11.22", default-features = false, features = ["builder",
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
 once_cell = "1.21"
+opentelemetry = "0.27"
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 prost = "0.13"
 prost-types = "0.13"
 redis = { version = "0.32.7", features = ["aio", "connection-manager", "tokio-comp"] }
@@ -34,7 +37,8 @@ tonic = { version = "0.12", features = ["transport"] }
 tower = { version = "0.5", features = ["timeout", "util"] }
 tower-http = { version = "0.6", features = ["compression-full", "cors", "request-id", "timeout", "trace"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-opentelemetry = "0.28"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 uuid = { version = "1.17", features = ["serde", "v4"] }
 
 [build-dependencies]

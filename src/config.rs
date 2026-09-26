@@ -100,6 +100,10 @@ pub struct Cli {
     pub webhook_dispatch_interval_ms: u64,
     #[arg(long, env = "WEBHOOK_ALLOW_PRIVATE_URLS", default_value_t = false, action = clap::ArgAction::Set)]
     pub webhook_allow_private_urls: bool,
+    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
+    pub otel_exporter_otlp_endpoint: Option<String>,
+    #[arg(long, env = "OTEL_SERVICE_NAME", default_value = "fluxa-backend")]
+    pub otel_service_name: String,
     #[arg(long, env = "RETENTION_SWEEP_INTERVAL_HOURS", default_value_t = 24)]
     pub retention_sweep_interval_hours: i64,
     #[arg(long, env = "REFRESH_TOKEN_RETENTION_DAYS", default_value_t = 30)]
@@ -330,6 +334,16 @@ impl Cli {
 
     pub fn webhook_dispatch_interval(&self) -> Duration {
         Duration::from_millis(self.webhook_dispatch_interval_ms)
+    }
+
+    /// Returns the OTLP endpoint when configured with a non-empty value. An
+    /// empty environment variable (for example a blank compose passthrough)
+    /// disables trace export just like an unset one.
+    pub fn otlp_endpoint(&self) -> Option<&str> {
+        self.otel_exporter_otlp_endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     }
 
     pub fn email_verification_ttl(&self) -> Duration {

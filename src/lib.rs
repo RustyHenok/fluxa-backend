@@ -33,7 +33,7 @@ use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 pub async fn run(cli: Cli) -> AppResult<()> {
-    init_tracing();
+    let tracer_provider = init_tracing(&cli);
 
     let config = Arc::new(cli.validate()?);
     let metrics = install_metrics()?;
@@ -98,18 +98,86 @@ pub async fn run(cli: Cli) -> AppResult<()> {
         }
     }
 
+    shutdown_tracing(tracer_provider).await;
+
     Ok(())
 }
 
-fn init_tracing() {
+fn init_tracing(cli: &Cli) -> Option<opentelemetry_sdk::trace::TracerProvider> {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,tower_http=info"));
+    let fmt_layer = tracing_subscriber::fmt::layer().with_target(true).json();
 
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(true)
-        .json()
+    let (otel_layer, provider) = match cli
+        .otlp_endpoint()
+        .map(|endpoint| build_tracer_provider(endpoint, cli.otel_service_name.clone()))
+    {
+        Some(Ok(provider)) => {
+            opentelemetry::global::set_text_map_propagator(
+                opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+            );
+            opentelemetry::global::set_tracer_provider(provider.clone());
+            let tracer = {
+                use opentelemetry::trace::TracerProvider as _;
+                provider.tracer("fluxa-backend")
+            };
+            (
+                Some(tracing_opentelemetry::layer().with_tracer(tracer)),
+                Some(provider),
+            )
+        }
+        Some(Err(error)) => {
+            eprintln!("failed to initialise OTLP trace export, continuing without it: {error}");
+            (None, None)
+        }
+        None => (None, None),
+    };
+
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt_layer)
+        .with(otel_layer)
         .try_init();
+
+    if provider.is_some() {
+        info!("OTLP trace export enabled");
+    }
+    provider
+}
+
+fn build_tracer_provider(
+    endpoint: &str,
+    service_name: String,
+) -> Result<opentelemetry_sdk::trace::TracerProvider, opentelemetry::trace::TraceError> {
+    use opentelemetry_otlp::WithExportConfig;
+
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()?;
+
+    Ok(opentelemetry_sdk::trace::TracerProvider::builder()
+        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+        .with_resource(opentelemetry_sdk::Resource::new(vec![
+            opentelemetry::KeyValue::new("service.name", service_name),
+        ]))
+        .build())
+}
+
+async fn shutdown_tracing(provider: Option<opentelemetry_sdk::trace::TracerProvider>) {
+    let Some(provider) = provider else {
+        return;
+    };
+    // Shut down on a blocking thread: flushing the batch processor blocks on
+    // the export channel, which can deadlock inside the async runtime.
+    match tokio::task::spawn_blocking(move || provider.shutdown()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!("failed to flush OTLP spans on shutdown: {error}"),
+        Err(error) => warn!("failed to join OTLP shutdown task: {error}"),
+    }
 }
 
 fn install_metrics() -> AppResult<PrometheusHandle> {

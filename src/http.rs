@@ -211,6 +211,9 @@ fn router(state: AppState) -> AppResult<Router> {
         .layer(axum_middleware::from_fn(
             middleware::track_metrics_middleware,
         ))
+        .layer(axum_middleware::from_fn(
+            middleware::propagate_trace_context,
+        ))
         .layer(TraceLayer::new_for_http())
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(

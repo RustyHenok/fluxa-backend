@@ -28,6 +28,10 @@ spec:
               value: log # switch to smtp with SMTP_URL/MAIL_FROM in the secret
             - name: ARTIFACT_STORAGE_DIR
               value: /var/lib/fluxa/exports
+            - name: OTEL_SERVICE_NAME
+              value: fluxa-worker
+            # - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            #   value: http://otel-collector.observability:4317
           envFrom:
             - secretRef:
                 name: fluxa-backend

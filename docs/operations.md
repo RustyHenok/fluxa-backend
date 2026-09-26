@@ -28,6 +28,8 @@ Secrets (set via your secret manager, never in images):
 | `GRPC_AUTH_TOKEN` | ≥ 32 chars, shared with internal gRPC callers only |
 | `SMTP_URL` / `MAIL_FROM` | only when `MAILER_PROVIDER=smtp` |
 | `METRICS_AUTH_TOKEN` | optional; when set, `/metrics` requires this bearer token |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | optional; OTLP/gRPC collector endpoint enabling trace export |
+| `OTEL_SERVICE_NAME` | optional; `service.name` resource attribute (default `fluxa-backend`) |
 
 The service warns at startup when `CORS_ALLOW_ORIGIN=*` or when the docker-compose development `JWT_SECRET`/`GRPC_AUTH_TOKEN` values are detected — treat those warnings as deploy blockers outside local development.
 
@@ -45,9 +47,18 @@ The service warns at startup when `CORS_ALLOW_ORIGIN=*` or when the docker-compo
 - `jobs_queued` (database) and `job_queue_depth` (Redis dispatch list)
 - `jobs_completed_total{job_type}`, `jobs_failed_total{job_type}`, `jobs_reaped_total`
 - `notifications_sent_total`, `notifications_failed_total`
+- `webhooks_delivered_total`, `webhooks_failed_total`
 - `retention_rows_purged_total{table}`
 
-Distributed tracing: structured JSON logs include `x-request-id` propagation today. OTLP trace export is a planned follow-up; until then, forward logs to your aggregator and correlate on request id.
+## Distributed tracing
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example `http://otel-collector:4317`) to export spans over OTLP/gRPC; leave it unset (or empty) to disable tracing entirely, which is the default. `OTEL_SERVICE_NAME` (default `fluxa-backend`) controls the `service.name` resource attribute — override it per deployment (for example `fluxa-api` vs `fluxa-worker`) to separate the two roles in your tracing backend.
+
+- Every HTTP request gets a span from the tower-http trace layer; inbound W3C `traceparent`/`tracestate` headers are adopted as the parent context, so traces continue across upstream services.
+- Spans respect `RUST_LOG` filtering (the default filter is `info,sqlx=warn,tower_http=info`).
+- The batch exporter flushes on graceful shutdown; spans buffered during a crash are lost.
+- The exporter speaks plaintext OTLP/gRPC — terminate TLS at a local collector or sidecar rather than pointing it at a remote TLS endpoint.
+- Structured JSON logs still include `x-request-id` propagation for log-based correlation when tracing is disabled.
 
 ## Data retention
 

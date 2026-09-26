@@ -18,6 +18,7 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - Task file attachments stored through the artifact storage layer with size and per-task limits
 - Bulk task status updates for up to 100 tasks in one atomic request
 - Tenant webhooks with HMAC-SHA256-signed deliveries for task lifecycle events, retried through a durable outbox
+- Opt-in OTLP distributed tracing (`OTEL_EXPORTER_OTLP_ENDPOINT`) with W3C trace context propagation on inbound requests
 
 ## Main endpoints
 

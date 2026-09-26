@@ -4,6 +4,8 @@ use axum::extract::{MatchedPath, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use metrics::{counter, histogram};
+use opentelemetry::trace::TraceContextExt;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::error::AppResult;
 use crate::state::AppState;
@@ -12,6 +14,31 @@ use super::AuthenticatedUser;
 use super::helpers::{
     attach_rate_limit_headers, bearer_token, client_identifier, parse_uuid, rate_limit_response,
 };
+
+struct HeaderContextExtractor<'a>(&'a axum::http::HeaderMap);
+
+impl opentelemetry::propagation::Extractor for HeaderContextExtractor<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|value| value.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(|key| key.as_str()).collect()
+    }
+}
+
+/// Adopts an inbound W3C `traceparent`/`tracestate` context as the parent of
+/// the request span so distributed traces continue across services. This is a
+/// no-op unless OTLP trace export is configured.
+pub(super) async fn propagate_trace_context(request: Request, next: Next) -> Response {
+    let parent = opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderContextExtractor(request.headers()))
+    });
+    if parent.span().span_context().is_remote() {
+        tracing::Span::current().set_parent(parent);
+    }
+    next.run(request).await
+}
 
 /// Records a labeled request counter and duration histogram for every HTTP
 /// request, keyed by method and the matched route template.

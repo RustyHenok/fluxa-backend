@@ -187,6 +187,8 @@ mod tests {
                 max_attachment_size_bytes: 5_242_880,
                 webhook_dispatch_interval_ms: 5_000,
                 webhook_allow_private_urls: false,
+                otel_exporter_otlp_endpoint: None,
+                otel_service_name: "fluxa-backend".into(),
                 retention_sweep_interval_hours: 24,
                 refresh_token_retention_days: 30,
                 job_retention_days: 30,
@@ -227,5 +229,23 @@ mod tests {
 
         assert_eq!(access.sub, user.id.to_string());
         assert_eq!(refresh.tenant_id, membership.tenant_id.to_string());
+    }
+
+    #[test]
+    fn otlp_endpoint_ignores_blank_values() {
+        let base = config();
+        assert_eq!(base.otlp_endpoint(), None);
+
+        let blank = Cli {
+            otel_exporter_otlp_endpoint: Some("   ".into()),
+            ..(*base).clone()
+        };
+        assert_eq!(blank.otlp_endpoint(), None);
+
+        let configured = Cli {
+            otel_exporter_otlp_endpoint: Some(" http://collector:4317 ".into()),
+            ..(*base).clone()
+        };
+        assert_eq!(configured.otlp_endpoint(), Some("http://collector:4317"));
     }
 }
