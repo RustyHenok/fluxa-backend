@@ -294,6 +294,30 @@ ARTIFACT_JSON="$(curl -sS "$BASE$ARTIFACT_PATH" -H "Authorization: Bearer $ACCES
 [[ "$(jq -r '.tasks[0].id' <<<"$ARTIFACT_JSON")" == "$TASK_ID" ]] || fail "export artifact did not include the expected task"
 [[ "$(jq -r '.tasks[0].project_id' <<<"$ARTIFACT_JSON")" == "$PROJECT_ID" ]] || fail "export artifact did not include the expected project linkage"
 
+step "Bulk update task statuses"
+BULK_TASK_IDS=()
+for i in 1 2; do
+  BULK_TASK_JSON="$(
+    curl -sS -X POST "$BASE/v1/tasks" \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "Idempotency-Key: bulk-task-$i-$(date +%s)-$RANDOM" \
+      -H 'content-type: application/json' \
+      -d "{\"project_id\":\"$PROJECT_ID\",\"title\":\"Bulk smoke task $i\"}"
+  )"
+  BULK_TASK_IDS+=("$(jq -er '.id' <<<"$BULK_TASK_JSON")")
+done
+BULK_UPDATE_JSON="$(
+  curl -sS -X POST "$BASE/v1/tasks/bulk/status" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"task_ids\":[\"${BULK_TASK_IDS[0]}\",\"${BULK_TASK_IDS[1]}\"],\"status\":\"done\"}"
+)"
+[[ "$(jq -r '.updated' <<<"$BULK_UPDATE_JSON")" == "2" ]] || fail "bulk status update did not report two updated tasks"
+[[ "$(jq -r '.data[0].id' <<<"$BULK_UPDATE_JSON")" == "${BULK_TASK_IDS[0]}" ]] || fail "bulk status update did not preserve request order"
+[[ "$(jq -r '[.data[].status] | unique | join(",")' <<<"$BULK_UPDATE_JSON")" == "done" ]] || fail "bulk status update did not set every task to done"
+BULK_AUDIT_JSON="$(curl -sS "$BASE/v1/tasks/${BULK_TASK_IDS[0]}/audit?limit=5" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.data[0].event_type' <<<"$BULK_AUDIT_JSON")" == "task_status_updated" ]] || fail "bulk status update did not record an audit event"
+
 step "Invite a second member and enforce role boundaries"
 MEMBER_EMAIL="smoke-member-$(date +%s)-$RANDOM@example.com"
 MEMBER_REGISTER_JSON="$(

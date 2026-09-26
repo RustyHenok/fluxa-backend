@@ -2345,6 +2345,196 @@ async fn task_attachments_upload_download_and_delete() {
     assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn bulk_task_status_updates_are_atomic() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "bulk-owner").await;
+    let outsider = register_user(&client, &server.http_base, "bulk-outsider").await;
+
+    let first = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "Bulk first",
+        "open",
+        "medium",
+    )
+    .await;
+    let second = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "Bulk second",
+        "open",
+        "medium",
+    )
+    .await;
+    let third = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "Bulk third",
+        "open",
+        "medium",
+    )
+    .await;
+    let first_id = first["id"].as_str().expect("first task id").to_string();
+    let second_id = second["id"].as_str().expect("second task id").to_string();
+    let third_id = third["id"].as_str().expect("third task id").to_string();
+    let bulk_url = format!("{}/v1/tasks/bulk/status", server.http_base);
+
+    // An empty id list is rejected.
+    let empty = client
+        .post(&bulk_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "task_ids": [], "status": "done" }))
+        .send()
+        .await
+        .expect("empty bulk update should return a response");
+    assert_eq!(empty.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // More than 100 unique ids are rejected.
+    let oversized_ids: Vec<String> = (0..101).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+    let oversized = client
+        .post(&bulk_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "task_ids": oversized_ids, "status": "done" }))
+        .send()
+        .await
+        .expect("oversized bulk update should return a response");
+    assert_eq!(oversized.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Unsupported statuses are rejected.
+    let bad_status = client
+        .post(&bulk_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "task_ids": [first_id], "status": "blocked" }))
+        .send()
+        .await
+        .expect("invalid status bulk update should return a response");
+    assert_eq!(bad_status.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Unknown ids abort the whole batch without partial updates.
+    let mixed = client
+        .post(&bulk_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({
+            "task_ids": [first_id, uuid::Uuid::new_v4().to_string()],
+            "status": "done",
+        }))
+        .send()
+        .await
+        .expect("mixed bulk update should return a response");
+    assert_eq!(mixed.status(), reqwest::StatusCode::NOT_FOUND);
+    let first_after_mixed: Value = client
+        .get(format!("{}/v1/tasks/{}", server.http_base, first_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task fetch should return a response")
+        .json()
+        .await
+        .expect("task fetch should be json");
+    assert_eq!(
+        first_after_mixed["status"], "open",
+        "failed batch must not update any task"
+    );
+
+    // Other tenants cannot touch these tasks.
+    let cross_tenant = client
+        .post(&bulk_url)
+        .bearer_auth(&outsider.access_token)
+        .json(&json!({ "task_ids": [first_id, second_id], "status": "done" }))
+        .send()
+        .await
+        .expect("cross tenant bulk update should return a response");
+    assert_eq!(cross_tenant.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // Duplicate ids collapse to a single update.
+    let deduped: Value = client
+        .post(&bulk_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({
+            "task_ids": [third_id, third_id],
+            "status": "in_progress",
+        }))
+        .send()
+        .await
+        .expect("deduped bulk update should return a response")
+        .json()
+        .await
+        .expect("deduped bulk update should be json");
+    assert_eq!(deduped["updated"], 1);
+    assert_eq!(deduped["data"][0]["id"], third_id.as_str());
+    assert_eq!(deduped["data"][0]["status"], "in_progress");
+
+    // A successful batch updates every task and echoes request order.
+    let bulk = client
+        .post(&bulk_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({
+            "task_ids": [second_id, first_id],
+            "status": "done",
+        }))
+        .send()
+        .await
+        .expect("bulk update should return a response");
+    assert_eq!(bulk.status(), reqwest::StatusCode::OK);
+    let bulk_body: Value = bulk.json().await.expect("bulk update should be json");
+    assert_eq!(bulk_body["updated"], 2);
+    assert_eq!(bulk_body["data"][0]["id"], second_id.as_str());
+    assert_eq!(bulk_body["data"][1]["id"], first_id.as_str());
+    assert_eq!(bulk_body["data"][0]["status"], "done");
+    assert_eq!(bulk_body["data"][1]["status"], "done");
+
+    // The cached task detail reflects the new status.
+    let first_after_bulk: Value = client
+        .get(format!("{}/v1/tasks/{}", server.http_base, first_id))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task fetch should return a response")
+        .json()
+        .await
+        .expect("task fetch should be json");
+    assert_eq!(first_after_bulk["status"], "done");
+
+    // Status filters see the bulk changes.
+    let done_list: Value = client
+        .get(format!("{}/v1/tasks?status=done", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task list should return a response")
+        .json()
+        .await
+        .expect("task list should be json");
+    assert_eq!(done_list["data"].as_array().expect("task array").len(), 2);
+
+    // Each updated task records a bulk status audit event.
+    let audit: Value = client
+        .get(format!(
+            "{}/v1/tasks/{}/audit?limit=10",
+            server.http_base, first_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("task audit should return a response")
+        .json()
+        .await
+        .expect("task audit should be json");
+    let newest = &audit["data"][0];
+    assert_eq!(newest["event_type"], "task_status_updated");
+    assert_eq!(newest["payload"]["status"], "done");
+}
+
 fn sweep_notification_count(reply: &fluxa_backend::grpc::proto::JobReply) -> f64 {
     let payload = reply
         .result_payload
