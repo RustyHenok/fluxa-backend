@@ -96,6 +96,10 @@ pub struct Cli {
     pub artifact_storage_dir: String,
     #[arg(long, env = "MAX_ATTACHMENT_SIZE_BYTES", default_value_t = 5_242_880)]
     pub max_attachment_size_bytes: usize,
+    #[arg(long, env = "WEBHOOK_DISPATCH_INTERVAL_MS", default_value_t = 5_000)]
+    pub webhook_dispatch_interval_ms: u64,
+    #[arg(long, env = "WEBHOOK_ALLOW_PRIVATE_URLS", default_value_t = false, action = clap::ArgAction::Set)]
+    pub webhook_allow_private_urls: bool,
     #[arg(long, env = "RETENTION_SWEEP_INTERVAL_HOURS", default_value_t = 24)]
     pub retention_sweep_interval_hours: i64,
     #[arg(long, env = "REFRESH_TOKEN_RETENTION_DAYS", default_value_t = 30)]
@@ -225,6 +229,12 @@ impl Cli {
             ));
         }
 
+        if self.webhook_dispatch_interval_ms == 0 {
+            return Err(AppError::Validation(
+                "WEBHOOK_DISPATCH_INTERVAL_MS must be positive".into(),
+            ));
+        }
+
         if self.retention_sweep_interval_hours <= 0
             || self.refresh_token_retention_days <= 0
             || self.job_retention_days <= 0
@@ -316,6 +326,10 @@ impl Cli {
 
     pub fn notify_dispatch_interval(&self) -> Duration {
         Duration::from_millis(self.notify_dispatch_interval_ms)
+    }
+
+    pub fn webhook_dispatch_interval(&self) -> Duration {
+        Duration::from_millis(self.webhook_dispatch_interval_ms)
     }
 
     pub fn email_verification_ttl(&self) -> Duration {

@@ -185,6 +185,8 @@ mod tests {
                 reminder_dedupe_ttl_hours: 24,
                 artifact_storage_dir: "data/exports".into(),
                 max_attachment_size_bytes: 5_242_880,
+                webhook_dispatch_interval_ms: 5_000,
+                webhook_allow_private_urls: false,
                 retention_sweep_interval_hours: 24,
                 refresh_token_retention_days: 30,
                 job_retention_days: 30,

@@ -6,6 +6,7 @@ pub mod labels;
 pub mod notifications;
 pub mod projects;
 pub mod tasks;
+pub mod webhooks;
 
 pub use attachments::{
     AttachmentRecord, AttachmentResponse, MAX_ATTACHMENTS_PER_TASK,
@@ -41,4 +42,12 @@ pub use tasks::{
     TASK_STATUS_OPEN, TaskAuditRecord, TaskAuditResponse, TaskFilters, TaskPriority, TaskRecord,
     TaskResponse, TaskStatus, UpdateTaskInput, normalize_bulk_task_ids, validate_task_priority,
     validate_task_status,
+};
+pub use webhooks::{
+    MAX_WEBHOOKS_PER_TENANT, SUPPORTED_WEBHOOK_EVENTS, WEBHOOK_DELIVERY_STATUS_DEAD_LETTER,
+    WEBHOOK_DELIVERY_STATUS_DELIVERED, WEBHOOK_DELIVERY_STATUS_PENDING,
+    WEBHOOK_EVENT_TASK_ARCHIVED, WEBHOOK_EVENT_TASK_CREATED, WEBHOOK_EVENT_TASK_RESTORED,
+    WEBHOOK_EVENT_TASK_STATUS_UPDATED, WEBHOOK_EVENT_TASK_UPDATED, WebhookDeliveryRecord,
+    WebhookDeliveryResponse, WebhookRecord, WebhookResponse, validate_webhook_events,
+    validate_webhook_url, webhook_signature,
 };

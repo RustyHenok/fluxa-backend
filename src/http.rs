@@ -131,6 +131,18 @@ fn router(state: AppState) -> AppResult<Router> {
             patch(handlers::update_label).delete(handlers::delete_label),
         )
         .route(
+            "/webhooks",
+            get(handlers::list_webhooks).post(handlers::create_webhook),
+        )
+        .route(
+            "/webhooks/:webhook_id",
+            patch(handlers::update_webhook).delete(handlers::delete_webhook),
+        )
+        .route(
+            "/webhooks/:webhook_id/deliveries",
+            get(handlers::list_webhook_deliveries),
+        )
+        .route(
             "/tasks",
             get(handlers::list_tasks).post(handlers::create_task),
         )

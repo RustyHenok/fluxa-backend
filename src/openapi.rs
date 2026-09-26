@@ -22,6 +22,7 @@ pub fn document() -> Value {
             { "name": "tenants", "description": "Tenant-scoped membership endpoints." },
             { "name": "projects", "description": "Tenant-scoped project hierarchy endpoints." },
             { "name": "labels", "description": "Tenant-scoped label management and task label assignment." },
+            { "name": "webhooks", "description": "Tenant-scoped webhook subscriptions with HMAC-signed deliveries." },
             { "name": "comments", "description": "Task comment threads." },
             { "name": "attachments", "description": "Task file attachments stored via the artifact storage backend." },
             { "name": "tasks", "description": "Task CRUD, filtering, and audit endpoints." },
@@ -664,6 +665,102 @@ pub fn document() -> Value {
                         "401": error_response("Authentication is required."),
                         "403": error_response("The active role cannot manage labels."),
                         "404": error_response("Label was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/webhooks": {
+                "get": {
+                    "tags": ["webhooks"],
+                    "operationId": "listWebhooks",
+                    "summary": "List tenant webhooks",
+                    "description": "Admin/owner only. Signing secrets are never returned after creation.",
+                    "responses": {
+                        "200": {
+                            "description": "Tenant webhooks ordered by newest first.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("WebhookResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["webhooks"],
+                    "operationId": "createWebhook",
+                    "summary": "Register a webhook",
+                    "description": "Admin/owner only. Registers an HTTPS/HTTP endpoint for the selected task lifecycle events. The response includes the signing secret exactly once; store it to verify the `X-Fluxa-Signature` header on deliveries. Private-network URLs are rejected unless the deployment enables `WEBHOOK_ALLOW_PRIVATE_URLS`.",
+                    "parameters": [
+                        idempotency_header_parameter()
+                    ],
+                    "requestBody": json_request_body(schema_ref("WebhookPayload"), true),
+                    "responses": {
+                        "201": json_response("Webhook created; secret shown once.", schema_ref("WebhookCreateResponse")),
+                        "400": error_response("Invalid webhook URL, unsupported event, or webhook limit reached."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "409": error_response("A request with this idempotency key is still in progress."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/webhooks/{webhook_id}": {
+                "patch": {
+                    "tags": ["webhooks"],
+                    "operationId": "updateWebhook",
+                    "summary": "Update a webhook",
+                    "description": "Admin/owner only. Updates the URL, subscribed events, or active flag.",
+                    "parameters": [
+                        path_uuid_parameter("webhook_id", "Webhook identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("WebhookPatchPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated webhook detail.", schema_ref("WebhookResponse")),
+                        "400": error_response("Invalid webhook patch payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "404": error_response("Webhook was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["webhooks"],
+                    "operationId": "deleteWebhook",
+                    "summary": "Delete a webhook",
+                    "description": "Admin/owner only. Deletes the webhook and its delivery history.",
+                    "parameters": [
+                        path_uuid_parameter("webhook_id", "Webhook identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Webhook deleted."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "404": error_response("Webhook was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/webhooks/{webhook_id}/deliveries": {
+                "get": {
+                    "tags": ["webhooks"],
+                    "operationId": "listWebhookDeliveries",
+                    "summary": "List webhook deliveries",
+                    "description": "Admin/owner only. Returns delivery attempts for the webhook, newest first, with cursor pagination.",
+                    "parameters": [
+                        path_uuid_parameter("webhook_id", "Webhook identifier."),
+                        limit_query_parameter(),
+                        cursor_query_parameter("cursor", "Opaque cursor from a previous delivery page.")
+                    ],
+                    "responses": {
+                        "200": json_response("Webhook delivery page.", schema_ref("WebhookDeliveryListResponse")),
+                        "400": error_response("Invalid cursor or limit."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "404": error_response("Webhook was not found."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -1317,6 +1414,110 @@ pub fn document() -> Value {
                         "updated_by": uuid_schema(),
                         "created_at": date_time_schema(),
                         "updated_at": date_time_schema()
+                    }
+                },
+                "WebhookPayload": {
+                    "type": "object",
+                    "required": ["url", "events"],
+                    "properties": {
+                        "url": json!({
+                            "type": "string",
+                            "description": "HTTP or HTTPS endpoint that receives deliveries. Private-network hosts are rejected unless the deployment allows them."
+                        }),
+                        "events": json!({
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "string",
+                                "enum": ["task_created", "task_updated", "task_status_updated", "task_archived", "task_restored"]
+                            },
+                            "description": "Task lifecycle events to subscribe to."
+                        })
+                    }
+                },
+                "WebhookPatchPayload": {
+                    "type": "object",
+                    "properties": {
+                        "url": string_schema(),
+                        "events": json!({
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "string",
+                                "enum": ["task_created", "task_updated", "task_status_updated", "task_archived", "task_restored"]
+                            }
+                        }),
+                        "is_active": json!({ "type": "boolean" })
+                    }
+                },
+                "WebhookResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "tenant_id",
+                        "url",
+                        "events",
+                        "is_active",
+                        "created_by",
+                        "created_at",
+                        "updated_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "tenant_id": uuid_schema(),
+                        "url": string_schema(),
+                        "events": array_schema(string_schema()),
+                        "is_active": json!({ "type": "boolean" }),
+                        "created_by": uuid_schema(),
+                        "created_at": date_time_schema(),
+                        "updated_at": date_time_schema()
+                    }
+                },
+                "WebhookCreateResponse": {
+                    "type": "object",
+                    "required": ["webhook", "secret"],
+                    "properties": {
+                        "webhook": schema_ref("WebhookResponse"),
+                        "secret": json!({
+                            "type": "string",
+                            "description": "HMAC-SHA256 signing secret. Returned only at creation time."
+                        })
+                    }
+                },
+                "WebhookDeliveryResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "webhook_id",
+                        "event_type",
+                        "payload",
+                        "status",
+                        "attempts",
+                        "delivered_at",
+                        "last_error",
+                        "created_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "webhook_id": uuid_schema(),
+                        "event_type": string_schema(),
+                        "payload": json!({ "description": "Event payload delivered to the endpoint." }),
+                        "status": json!({
+                            "type": "string",
+                            "enum": ["pending", "delivered", "dead_letter"]
+                        }),
+                        "attempts": json!({ "type": "integer" }),
+                        "delivered_at": nullable(date_time_schema()),
+                        "last_error": nullable(string_schema()),
+                        "created_at": date_time_schema()
+                    }
+                },
+                "WebhookDeliveryListResponse": {
+                    "type": "object",
+                    "required": ["data", "next_cursor"],
+                    "properties": {
+                        "data": array_schema(schema_ref("WebhookDeliveryResponse")),
+                        "next_cursor": nullable(string_schema())
                     }
                 },
                 "TaskLabelsPayload": {

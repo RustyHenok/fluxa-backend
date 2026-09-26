@@ -8,3 +8,4 @@ pub mod labels;
 pub mod memberships;
 pub mod projects;
 pub mod tasks;
+pub mod webhooks;

@@ -147,6 +147,7 @@ The following create endpoints require `Idempotency-Key`:
 - `POST /v1/labels`
 - `POST /v1/tasks/:task_id/comments`
 - `POST /v1/tasks/:task_id/attachments`
+- `POST /v1/webhooks`
 
 Client expectation:
 
@@ -220,6 +221,11 @@ Client expectation:
 - `POST /v1/tasks/:task_id/attachments` (raw body upload with `?file_name=`)
 - `GET /v1/tasks/:task_id/attachments/:attachment_id/download`
 - `DELETE /v1/tasks/:task_id/attachments/:attachment_id` (uploader or owner/admin)
+- `GET /v1/webhooks` (owner/admin)
+- `POST /v1/webhooks` (owner/admin; response includes the signing `secret` once)
+- `PATCH /v1/webhooks/:webhook_id` (owner/admin)
+- `DELETE /v1/webhooks/:webhook_id` (owner/admin)
+- `GET /v1/webhooks/:webhook_id/deliveries` (owner/admin)
 
 ### Bulk Status Updates
 
@@ -265,6 +271,17 @@ Client expectation:
 - attachment responses include a `download_path` pointing at `GET /v1/tasks/:task_id/attachments/:attachment_id/download`, which streams the bytes with the stored content type
 - only the uploader or an owner/admin can delete an attachment; deletion also removes the stored file
 - uploads and deletions appear in the task audit feed (`task_attachment_added` / `task_attachment_deleted`)
+
+### Webhooks
+
+- webhook management (all `/v1/webhooks*` endpoints) requires `owner` or `admin`; a tenant may register at most 10 webhooks
+- `POST /v1/webhooks` accepts `{ "url": "https://...", "events": [...] }`; supported events are `task_created`, `task_updated`, `task_status_updated`, `task_archived`, and `task_restored`
+- the create response is `{ "webhook": {...}, "secret": "..." }` — the signing secret is returned only once and is never included in later reads
+- webhook URLs must be `http`/`https`; private-network and loopback hosts are rejected unless the deployment sets `WEBHOOK_ALLOW_PRIVATE_URLS=true`
+- deliveries POST a JSON body `{ "id": delivery_id, "event": ..., "created_at": ..., "data": TaskResponse }` with headers `X-Fluxa-Event`, `X-Fluxa-Delivery`, and `X-Fluxa-Signature: sha256=<hex hmac-sha256(secret, raw body)>`
+- receivers should verify the signature with a constant-time comparison and respond with a 2xx status; failures are retried with exponential backoff up to 5 attempts, then parked as `dead_letter`
+- `GET /v1/webhooks/:webhook_id/deliveries` pages the delivery history (`data` + `next_cursor`, `limit` 1–100, default 20) with per-delivery `status` (`pending` / `delivered` / `dead_letter`), `attempts`, and `last_error`
+- `PATCH /v1/webhooks/:webhook_id` updates `url`, `events`, and/or `is_active`; disabled webhooks stop receiving new events
 
 ### Jobs / Exports
 

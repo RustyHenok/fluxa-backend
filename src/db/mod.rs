@@ -12,6 +12,9 @@ mod retention;
 mod tasks;
 mod user_tokens;
 mod users;
+mod webhooks;
+
+pub use webhooks::PaginatedWebhookDeliveries;
 
 use std::time::Duration;
 

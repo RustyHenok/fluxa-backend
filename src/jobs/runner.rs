@@ -8,6 +8,7 @@ use super::notifier::deliver_notifications_loop;
 use super::processor::process_jobs_loop;
 use super::reaper::reap_stale_jobs_loop;
 use super::scheduler::schedule_due_reminders_loop;
+use super::webhook_dispatcher::dispatch_webhooks_loop;
 
 pub async fn run_worker(state: AppState, shutdown: watch::Receiver<bool>) -> AppResult<()> {
     let dispatch_state = state.clone();
@@ -15,12 +16,14 @@ pub async fn run_worker(state: AppState, shutdown: watch::Receiver<bool>) -> App
     let processor_state = state.clone();
     let reaper_state = state.clone();
     let notifier_state = state.clone();
+    let webhook_state = state.clone();
 
     let dispatch_shutdown = shutdown.clone();
     let scheduler_shutdown = shutdown.clone();
     let processor_shutdown = shutdown.clone();
     let reaper_shutdown = shutdown.clone();
     let notifier_shutdown = shutdown.clone();
+    let webhook_shutdown = shutdown.clone();
 
     tokio::try_join!(
         dispatch_ready_jobs_loop(dispatch_state, dispatch_shutdown),
@@ -28,6 +31,7 @@ pub async fn run_worker(state: AppState, shutdown: watch::Receiver<bool>) -> App
         process_jobs_loop(processor_state, processor_shutdown),
         reap_stale_jobs_loop(reaper_state, reaper_shutdown),
         deliver_notifications_loop(notifier_state, notifier_shutdown),
+        dispatch_webhooks_loop(webhook_state, webhook_shutdown),
     )?;
 
     Ok(())

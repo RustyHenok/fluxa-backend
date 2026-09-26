@@ -5,7 +5,8 @@ use uuid::Uuid;
 use crate::domain::CommentResponse;
 use crate::domain::{
     ExportFormat, InvitationResponse, TaskAuditResponse, TaskFilters, TaskResponse,
-    TenantMembershipResponse, UserResponse, validate_task_priority, validate_task_status,
+    TenantMembershipResponse, UserResponse, WebhookDeliveryResponse, WebhookResponse,
+    validate_task_priority, validate_task_status,
 };
 use crate::error::AppResult;
 
@@ -253,6 +254,37 @@ pub(super) struct LabelPatchPayload {
 #[derive(Debug, Deserialize)]
 pub(super) struct TaskLabelsPayload {
     pub(super) label_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct WebhookPayload {
+    pub(super) url: String,
+    pub(super) events: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(super) struct WebhookPatchPayload {
+    pub(super) url: Option<String>,
+    pub(super) events: Option<Vec<String>>,
+    pub(super) is_active: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct WebhookCreateResponse {
+    pub(super) webhook: WebhookResponse,
+    pub(super) secret: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub(super) struct WebhookDeliveryListQuery {
+    pub(super) limit: Option<usize>,
+    pub(super) cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct WebhookDeliveryListResponse {
+    pub(super) data: Vec<WebhookDeliveryResponse>,
+    pub(super) next_cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

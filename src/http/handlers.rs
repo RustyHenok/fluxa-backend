@@ -20,13 +20,14 @@ use crate::domain::{
     TenantMembershipResponse, UpdateLabelInput, UpdateProjectInput, UpdateTaskInput, UserResponse,
     validate_role, validate_task_priority, validate_task_status,
 };
+use crate::domain::{WebhookDeliveryResponse, WebhookResponse};
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
     account as account_service, attachments as attachment_service, audit as audit_service,
     auth as auth_service, comments as comment_service, jobs as jobs_service,
     labels as label_service, memberships as membership_service, projects as project_service,
-    tasks as task_service,
+    tasks as task_service, webhooks as webhook_service,
 };
 use crate::state::AppState;
 use crate::storage::ArtifactStore;
@@ -41,7 +42,8 @@ use super::dto::{
     PasswordResetConfirmPayload, PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload,
     RefreshRequest, RegisterRequest, ResendVerificationPayload, SwitchTenantRequest,
     TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse,
-    TaskPatchPayload, TaskPayload, VerifyEmailPayload,
+    TaskPatchPayload, TaskPayload, VerifyEmailPayload, WebhookCreateResponse,
+    WebhookDeliveryListQuery, WebhookDeliveryListResponse, WebhookPatchPayload, WebhookPayload,
 };
 use super::helpers::{
     bearer_token, ensure_active_tenant, ensure_admin_role, ensure_task_write_role, normalize_email,
@@ -713,6 +715,138 @@ pub(super) async fn put_task_labels(
     )
     .await?;
     Ok(Json(labels.iter().map(LabelResponse::from).collect()))
+}
+
+pub(super) async fn list_webhooks(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<Vec<WebhookResponse>>> {
+    ensure_admin_role(user.role)?;
+    let webhooks = webhook_service::list_webhooks(&state, user.tenant_id).await?;
+    Ok(Json(webhooks.iter().map(WebhookResponse::from).collect()))
+}
+
+pub(super) async fn create_webhook(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+    Json(payload): Json<WebhookPayload>,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    ensure_admin_role(user.role)?;
+
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(user.tenant_id, "webhooks:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match webhook_service::create_webhook(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        &payload.url,
+        payload.events,
+    )
+    .await
+    {
+        Ok(webhook) => {
+            let body = serde_json::to_value(WebhookCreateResponse {
+                secret: webhook.secret.clone(),
+                webhook: WebhookResponse::from(&webhook),
+            })
+            .map_err(|error| AppError::internal(format!("failed to serialize webhook: {error}")))?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn update_webhook(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(webhook_id): Path<Uuid>,
+    Json(payload): Json<WebhookPatchPayload>,
+) -> AppResult<Json<WebhookResponse>> {
+    ensure_admin_role(user.role)?;
+    let webhook = webhook_service::update_webhook(
+        &state,
+        user.tenant_id,
+        webhook_id,
+        payload.url,
+        payload.events,
+        payload.is_active,
+    )
+    .await?;
+    Ok(Json(WebhookResponse::from(&webhook)))
+}
+
+pub(super) async fn delete_webhook(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(webhook_id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    ensure_admin_role(user.role)?;
+    webhook_service::delete_webhook(&state, user.tenant_id, webhook_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn list_webhook_deliveries(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(webhook_id): Path<Uuid>,
+    Query(query): Query<WebhookDeliveryListQuery>,
+) -> AppResult<Json<WebhookDeliveryListResponse>> {
+    ensure_admin_role(user.role)?;
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(AuditCursor::decode)
+        .transpose()?;
+    let page = webhook_service::list_webhook_deliveries(
+        &state,
+        user.tenant_id,
+        webhook_id,
+        cursor.as_ref(),
+        limit,
+    )
+    .await?;
+
+    Ok(Json(WebhookDeliveryListResponse {
+        data: page
+            .deliveries
+            .iter()
+            .map(WebhookDeliveryResponse::from)
+            .collect(),
+        next_cursor: page.next_cursor.map(|value| value.encode()).transpose()?,
+    }))
 }
 
 pub(super) async fn list_task_comments(
