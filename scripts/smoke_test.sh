@@ -318,6 +318,42 @@ BULK_UPDATE_JSON="$(
 BULK_AUDIT_JSON="$(curl -sS "$BASE/v1/tasks/${BULK_TASK_IDS[0]}/audit?limit=5" -H "Authorization: Bearer $ACCESS_TOKEN")"
 [[ "$(jq -r '.data[0].event_type' <<<"$BULK_AUDIT_JSON")" == "task_status_updated" ]] || fail "bulk status update did not record an audit event"
 
+step "Register webhook and verify delivery tracking"
+WEBHOOK_JSON="$(
+  curl -sS -X POST "$BASE/v1/webhooks" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: webhook-$(date +%s)-$RANDOM" \
+    -H 'content-type: application/json' \
+    -d '{"url":"http://127.0.0.1:9/hook","events":["task_created"]}'
+)"
+WEBHOOK_ID="$(jq -er '.webhook.id' <<<"$WEBHOOK_JSON")" || fail "webhook create did not return an id"
+[[ -n "$(jq -r '.secret // empty' <<<"$WEBHOOK_JSON")" ]] || fail "webhook create did not return the signing secret"
+WEBHOOK_LIST_JSON="$(curl -sS "$BASE/v1/webhooks" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r 'length' <<<"$WEBHOOK_LIST_JSON")" == "1" ]] || fail "webhook list did not return the registered webhook"
+[[ "$(jq -r '.[0] | has("secret")' <<<"$WEBHOOK_LIST_JSON")" == "false" ]] || fail "webhook list leaked the signing secret"
+WEBHOOK_TASK_JSON="$(
+  curl -sS -X POST "$BASE/v1/tasks" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: webhook-task-$(date +%s)-$RANDOM" \
+    -H 'content-type: application/json' \
+    -d "{\"project_id\":\"$PROJECT_ID\",\"title\":\"Webhook smoke task\"}"
+)"
+jq -er '.id' <<<"$WEBHOOK_TASK_JSON" > /dev/null || fail "webhook trigger task was not created"
+WEBHOOK_DELIVERIES_JSON="$(curl -sS "$BASE/v1/webhooks/$WEBHOOK_ID/deliveries" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.data | length' <<<"$WEBHOOK_DELIVERIES_JSON")" == "1" ]] || fail "webhook delivery was not enqueued for the subscribed event"
+[[ "$(jq -r '.data[0].event_type' <<<"$WEBHOOK_DELIVERIES_JSON")" == "task_created" ]] || fail "webhook delivery recorded the wrong event type"
+WEBHOOK_PATCH_JSON="$(
+  curl -sS -X PATCH "$BASE/v1/webhooks/$WEBHOOK_ID" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d '{"is_active":false}'
+)"
+[[ "$(jq -r '.is_active' <<<"$WEBHOOK_PATCH_JSON")" == "false" ]] || fail "webhook patch did not disable the webhook"
+capture_http DELETE "$BASE/v1/webhooks/$WEBHOOK_ID" -H "Authorization: Bearer $ACCESS_TOKEN"
+[[ "$HTTP_STATUS" == "204" ]] || fail "webhook delete did not return 204"
+capture_http GET "$BASE/v1/webhooks/$WEBHOOK_ID/deliveries" -H "Authorization: Bearer $ACCESS_TOKEN"
+[[ "$HTTP_STATUS" == "404" ]] || fail "deleted webhook deliveries endpoint did not return 404"
+
 step "Invite a second member and enforce role boundaries"
 MEMBER_EMAIL="smoke-member-$(date +%s)-$RANDOM@example.com"
 MEMBER_REGISTER_JSON="$(
