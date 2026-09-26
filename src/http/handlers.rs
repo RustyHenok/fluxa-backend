@@ -995,7 +995,7 @@ pub(super) async fn upload_task_attachment(
         ));
     }
     if body.len() > state.config.max_attachment_size_bytes {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::PayloadTooLarge(format!(
             "attachment exceeds the maximum size of {} bytes",
             state.config.max_attachment_size_bytes
         )));
@@ -1412,7 +1412,22 @@ pub(super) async fn download_job_artifact(
         .await?
         .ok_or_else(|| AppError::NotFound("artifact is no longer available".into()))?;
 
-    let filename = key.rsplit('/').next().unwrap_or("export").to_owned();
+    let mut filename: String = key
+        .rsplit('/')
+        .next()
+        .unwrap_or("export")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if filename.is_empty() {
+        filename = "export".to_owned();
+    }
     Ok((
         [
             (CONTENT_TYPE, content_type),

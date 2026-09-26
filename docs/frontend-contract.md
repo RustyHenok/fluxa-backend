@@ -116,6 +116,7 @@ Common codes:
 - `forbidden`
 - `not_found`
 - `conflict`
+- `payload_too_large`
 - `rate_limited`
 - `internal_error`
 

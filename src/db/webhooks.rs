@@ -3,8 +3,8 @@ use uuid::Uuid;
 
 use super::Database;
 use crate::domain::{
-    WEBHOOK_DELIVERY_STATUS_DEAD_LETTER, WEBHOOK_DELIVERY_STATUS_PENDING, WebhookDeliveryRecord,
-    WebhookRecord,
+    MAX_WEBHOOKS_PER_TENANT, WEBHOOK_DELIVERY_STATUS_DEAD_LETTER, WEBHOOK_DELIVERY_STATUS_PENDING,
+    WebhookDeliveryRecord, WebhookRecord,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::AuditCursor;
@@ -30,7 +30,26 @@ impl Database {
         events: &[String],
     ) -> AppResult<WebhookRecord> {
         let now = Utc::now();
-        sqlx::query_as::<_, WebhookRecord>(&format!(
+        let mut tx = self.pool.begin().await?;
+
+        // Serialize concurrent registrations for the same tenant so the
+        // per-tenant cap cannot be exceeded by racing requests.
+        sqlx::query("SELECT id FROM tenants WHERE id = $1 FOR UPDATE")
+            .bind(tenant_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM webhooks WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if count >= MAX_WEBHOOKS_PER_TENANT {
+            return Err(AppError::Validation(format!(
+                "a tenant may register at most {MAX_WEBHOOKS_PER_TENANT} webhooks"
+            )));
+        }
+
+        let webhook = sqlx::query_as::<_, WebhookRecord>(&format!(
             r#"
             INSERT INTO webhooks (id, tenant_id, url, secret, events, is_active, created_by, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $7)
@@ -44,9 +63,11 @@ impl Database {
         .bind(events)
         .bind(actor_id)
         .bind(now)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(AppError::from)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(webhook)
     }
 
     pub async fn list_webhooks(&self, tenant_id: Uuid) -> AppResult<Vec<WebhookRecord>> {
@@ -62,14 +83,6 @@ impl Database {
         .fetch_all(&self.pool)
         .await
         .map_err(AppError::from)
-    }
-
-    pub async fn count_webhooks(&self, tenant_id: Uuid) -> AppResult<i64> {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM webhooks WHERE tenant_id = $1")
-            .bind(tenant_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(AppError::from)
     }
 
     pub async fn get_webhook(&self, tenant_id: Uuid, webhook_id: Uuid) -> AppResult<WebhookRecord> {

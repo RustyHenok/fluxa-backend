@@ -72,6 +72,7 @@ pub(super) fn status_from_error(error: AppError) -> Status {
         AppError::Forbidden(message) => Status::permission_denied(message),
         AppError::NotFound(message) => Status::not_found(message),
         AppError::Conflict(message) => Status::already_exists(message),
+        AppError::PayloadTooLarge(message) => Status::invalid_argument(message),
         AppError::RateLimited(message) => Status::resource_exhausted(message),
         AppError::Internal(message) => Status::internal(message),
     }

@@ -2,8 +2,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::domain::{
-    MAX_WEBHOOKS_PER_TENANT, WebhookDeliveryRecord, WebhookRecord, validate_webhook_events,
-    validate_webhook_url,
+    WebhookDeliveryRecord, WebhookRecord, validate_webhook_events, validate_webhook_url,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::AuditCursor;
@@ -39,12 +38,7 @@ pub async fn create_webhook(
     let url = validate_webhook_url(url, state.config.webhook_allow_private_urls)?;
     let events = validate_webhook_events(events)?;
 
-    if state.db.count_webhooks(tenant_id).await? >= MAX_WEBHOOKS_PER_TENANT {
-        return Err(AppError::Validation(format!(
-            "a tenant may register at most {MAX_WEBHOOKS_PER_TENANT} webhooks"
-        )));
-    }
-
+    // The per-tenant cap is enforced atomically inside `Database::create_webhook`.
     let secret = generate_token();
     state
         .db
