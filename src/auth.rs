@@ -189,6 +189,15 @@ mod tests {
                 webhook_allow_private_urls: false,
                 otel_exporter_otlp_endpoint: None,
                 otel_service_name: "fluxa-backend".into(),
+                oauth_google_client_id: None,
+                oauth_google_client_secret: None,
+                oauth_google_token_url: "https://oauth2.googleapis.com/token".into(),
+                oauth_google_userinfo_url: "https://openidconnect.googleapis.com/v1/userinfo"
+                    .into(),
+                oauth_github_client_id: None,
+                oauth_github_client_secret: None,
+                oauth_github_token_url: "https://github.com/login/oauth/access_token".into(),
+                oauth_github_userinfo_url: "https://api.github.com/user".into(),
                 retention_sweep_interval_hours: 24,
                 refresh_token_retention_days: 30,
                 job_retention_days: 30,
@@ -247,5 +256,33 @@ mod tests {
             ..(*base).clone()
         };
         assert_eq!(configured.otlp_endpoint(), Some("http://collector:4317"));
+    }
+
+    #[test]
+    fn oauth_provider_requires_client_id_and_secret() {
+        let base = config();
+        assert!(base.oauth_provider("google").is_none());
+        assert!(base.oauth_provider("github").is_none());
+        assert!(base.oauth_provider("gitlab").is_none());
+
+        let partial = Cli {
+            oauth_google_client_id: Some("client".into()),
+            oauth_google_client_secret: Some("   ".into()),
+            ..(*base).clone()
+        };
+        assert!(partial.oauth_provider("google").is_none());
+
+        let configured = Cli {
+            oauth_google_client_id: Some(" client ".into()),
+            oauth_google_client_secret: Some("secret".into()),
+            ..(*base).clone()
+        };
+        let settings = configured
+            .oauth_provider("google")
+            .expect("google should be configured");
+        assert_eq!(settings.client_id, "client");
+        assert_eq!(settings.client_secret, "secret");
+        assert_eq!(settings.token_url, "https://oauth2.googleapis.com/token");
+        assert!(configured.oauth_provider("github").is_none());
     }
 }

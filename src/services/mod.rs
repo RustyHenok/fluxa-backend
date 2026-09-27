@@ -6,6 +6,7 @@ pub mod comments;
 pub mod jobs;
 pub mod labels;
 pub mod memberships;
+pub mod oauth;
 pub mod projects;
 pub mod tasks;
 pub mod webhooks;

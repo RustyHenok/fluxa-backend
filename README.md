@@ -19,11 +19,13 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - Bulk task status updates for up to 100 tasks in one atomic request
 - Tenant webhooks with HMAC-SHA256-signed deliveries for task lifecycle events, retried through a durable outbox
 - Opt-in OTLP distributed tracing (`OTEL_EXPORTER_OTLP_ENDPOINT`) with W3C trace context propagation on inbound requests
+- OAuth login for Google and GitHub (`POST /v1/auth/oauth/:provider`) with verified-email linking and automatic account provisioning
 
 ## Main endpoints
 
 - `POST /v1/auth/register`
 - `POST /v1/auth/login`
+- `POST /v1/auth/oauth/:provider`
 - `POST /v1/auth/refresh`
 - `POST /v1/auth/logout`
 - `POST /v1/auth/verify-email`

@@ -841,6 +841,30 @@
         ],
         "type": "string"
       },
+      "OAuthLoginRequest": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "redirect_uri": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "tenant_name": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "redirect_uri"
+        ],
+        "type": "object"
+      },
       "PasswordResetConfirmPayload": {
         "properties": {
           "new_password": {
@@ -1958,6 +1982,114 @@
         },
         "security": [],
         "summary": "Revoke a refresh token and optionally its access token",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/oauth/{provider}": {
+      "post": {
+        "description": "Exchanges an authorization code with the provider (`google` or `github`) and signs the user in. A first-time identity is linked to an existing account with the same verified email, or a new account and workspace are provisioned. Providers must be configured server-side via OAUTH_<PROVIDER>_CLIENT_ID/SECRET.",
+        "operationId": "oauthLogin",
+        "parameters": [
+          {
+            "description": "OAuth provider name (google or github).",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "enum": [
+                "google",
+                "github"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            },
+            "description": "Login succeeded."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unsupported or unconfigured provider, or invalid payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The provider rejected the authorization code or returned an unusable identity."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The provider email address is not verified."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The provider identity is already linked."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Too many login attempts."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [],
+        "summary": "Authenticate with an OAuth provider",
         "tags": [
           "auth"
         ]

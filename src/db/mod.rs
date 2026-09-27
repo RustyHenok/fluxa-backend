@@ -6,6 +6,7 @@ mod jobs;
 mod labels;
 mod memberships;
 mod notifications;
+mod oauth_accounts;
 mod projects;
 mod refresh_tokens;
 mod retention;

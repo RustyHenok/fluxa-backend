@@ -30,6 +30,8 @@ Secrets (set via your secret manager, never in images):
 | `METRICS_AUTH_TOKEN` | optional; when set, `/metrics` requires this bearer token |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | optional; OTLP/gRPC collector endpoint enabling trace export |
 | `OTEL_SERVICE_NAME` | optional; `service.name` resource attribute (default `fluxa-backend`) |
+| `OAUTH_GOOGLE_CLIENT_ID` / `OAUTH_GOOGLE_CLIENT_SECRET` | optional; enables `POST /v1/auth/oauth/google` when both are set |
+| `OAUTH_GITHUB_CLIENT_ID` / `OAUTH_GITHUB_CLIENT_SECRET` | optional; enables `POST /v1/auth/oauth/github` when both are set |
 
 The service warns at startup when `CORS_ALLOW_ORIGIN=*` or when the docker-compose development `JWT_SECRET`/`GRPC_AUTH_TOKEN` values are detected — treat those warnings as deploy blockers outside local development.
 

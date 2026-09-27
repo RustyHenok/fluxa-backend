@@ -26,8 +26,8 @@ use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
     account as account_service, attachments as attachment_service, audit as audit_service,
     auth as auth_service, comments as comment_service, jobs as jobs_service,
-    labels as label_service, memberships as membership_service, projects as project_service,
-    tasks as task_service, webhooks as webhook_service,
+    labels as label_service, memberships as membership_service, oauth as oauth_service,
+    projects as project_service, tasks as task_service, webhooks as webhook_service,
 };
 use crate::state::AppState;
 use crate::storage::ArtifactStore;
@@ -38,7 +38,7 @@ use super::dto::{
     BulkTaskStatusResponse, ChangeEmailPayload, ChangePasswordPayload, CommentListQuery,
     CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest, HealthResponse,
     InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse, LabelPatchPayload,
-    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
+    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload, OAuthLoginRequest,
     PasswordResetConfirmPayload, PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload,
     RefreshRequest, RegisterRequest, ResendVerificationPayload, SwitchTenantRequest,
     TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse,
@@ -118,6 +118,40 @@ pub(super) async fn login(
 ) -> AppResult<Json<AuthResponse>> {
     let email = normalize_email(&payload.email)?;
     let session = auth_service::login(&state, &email, &payload.password, payload.tenant_id).await?;
+
+    Ok(Json(AuthResponse {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in_seconds: session.expires_in_seconds,
+        user: UserResponse::from(&session.user),
+        active_tenant: TenantMembershipResponse::try_from(&session.membership)?,
+    }))
+}
+
+pub(super) async fn oauth_login(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+    Json(payload): Json<OAuthLoginRequest>,
+) -> AppResult<Json<AuthResponse>> {
+    let provider = provider.trim().to_ascii_lowercase();
+    if payload.code.trim().is_empty() {
+        return Err(AppError::Validation("code must not be empty".into()));
+    }
+    if payload.redirect_uri.trim().is_empty() {
+        return Err(AppError::Validation(
+            "redirect_uri must not be empty".into(),
+        ));
+    }
+
+    let session = oauth_service::oauth_login(
+        &state,
+        &provider,
+        payload.code.trim(),
+        payload.redirect_uri.trim(),
+        payload.tenant_id,
+        payload.tenant_name,
+    )
+    .await?;
 
     Ok(Json(AuthResponse {
         access_token: session.access_token,

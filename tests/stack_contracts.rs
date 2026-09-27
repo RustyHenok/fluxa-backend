@@ -2981,3 +2981,178 @@ fn sweep_notification_count(reply: &fluxa_backend::grpc::proto::JobReply) -> f64
         other => panic!("notification_count should be a number, got {other:?}"),
     }
 }
+
+async fn mock_oauth_token(body: String) -> axum::Json<Value> {
+    // The mock provider echoes the authorization code back as the access
+    // token so tests can encode the identity in the code itself.
+    let code = body
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("code="))
+        .unwrap_or_default()
+        .to_string();
+    let decoded = code.replace("%7C", "|").replace("%40", "@");
+    axum::Json(json!({ "access_token": decoded, "token_type": "bearer" }))
+}
+
+fn mock_bearer(headers: &axum::http::HeaderMap) -> String {
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or_default()
+        .to_string()
+}
+
+async fn mock_google_userinfo(headers: axum::http::HeaderMap) -> axum::Json<Value> {
+    // Tokens look like "sub|email|verified".
+    let token = mock_bearer(&headers);
+    let mut parts = token.split('|');
+    let sub = parts.next().unwrap_or_default().to_string();
+    let email = parts.next().unwrap_or_default().to_string();
+    let verified = parts.next().unwrap_or_default() == "true";
+    axum::Json(json!({ "sub": sub, "email": email, "email_verified": verified }))
+}
+
+async fn mock_github_user(headers: axum::http::HeaderMap) -> axum::Json<Value> {
+    let token = mock_bearer(&headers);
+    let sub = token.split('|').next().unwrap_or_default().to_string();
+    axum::Json(json!({ "id": 424_242, "login": sub, "email": Value::Null }))
+}
+
+async fn mock_github_emails(headers: axum::http::HeaderMap) -> axum::Json<Value> {
+    let token = mock_bearer(&headers);
+    let mut parts = token.split('|');
+    let _sub = parts.next();
+    let email = parts.next().unwrap_or_default().to_string();
+    let verified = parts.next().unwrap_or_default() == "true";
+    axum::Json(json!([
+        { "email": "ignored-secondary@example.com", "primary": false, "verified": false },
+        { "email": email, "primary": true, "verified": verified }
+    ]))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn oauth_login_provisions_links_and_rejects_unverified() {
+    let _guard = stack_test_guard().await;
+
+    // Mock provider serving google- and github-shaped endpoints.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("mock oauth listener should bind");
+    let mock_addr = listener
+        .local_addr()
+        .expect("mock oauth listener should expose its address");
+    let app = axum::Router::new()
+        .route("/token", axum::routing::post(mock_oauth_token))
+        .route("/userinfo", axum::routing::get(mock_google_userinfo))
+        .route("/gh/user", axum::routing::get(mock_github_user))
+        .route("/gh/user/emails", axum::routing::get(mock_github_emails));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("mock oauth server should run");
+    });
+
+    let mock_base = format!("http://{mock_addr}");
+    let server = TestServer::start_with_env(&[
+        ("OAUTH_GOOGLE_CLIENT_ID", "google-client".to_string()),
+        ("OAUTH_GOOGLE_CLIENT_SECRET", "google-secret".to_string()),
+        ("OAUTH_GOOGLE_TOKEN_URL", format!("{mock_base}/token")),
+        ("OAUTH_GOOGLE_USERINFO_URL", format!("{mock_base}/userinfo")),
+        ("OAUTH_GITHUB_CLIENT_ID", "github-client".to_string()),
+        ("OAUTH_GITHUB_CLIENT_SECRET", "github-secret".to_string()),
+        ("OAUTH_GITHUB_TOKEN_URL", format!("{mock_base}/token")),
+        ("OAUTH_GITHUB_USERINFO_URL", format!("{mock_base}/gh/user")),
+    ])
+    .await;
+    let client = Client::new();
+    let oauth_url = |provider: &str| format!("{}/v1/auth/oauth/{provider}", server.http_base);
+    let login = |provider: &'static str, code: String| {
+        let client = client.clone();
+        let url = oauth_url(provider);
+        async move {
+            client
+                .post(url)
+                .json(&json!({ "code": code, "redirect_uri": "https://app.example.com/callback" }))
+                .send()
+                .await
+                .expect("oauth login should return a response")
+        }
+    };
+
+    // Unsupported providers are rejected.
+    let unsupported = login("gitlab", "sub|user@example.com|true".into()).await;
+    assert_eq!(unsupported.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // A first google login provisions a user, workspace, and owner role.
+    let run = uuid::Uuid::new_v4().simple().to_string();
+    let google_email = format!("oauth-google-{run}@example.com");
+    let first = login("google", format!("google-sub-{run}|{google_email}|true")).await;
+    assert_eq!(first.status(), reqwest::StatusCode::OK);
+    let first: Value = first.json().await.expect("oauth login should be json");
+    assert_eq!(first["user"]["email"], google_email.as_str());
+    assert_eq!(first["active_tenant"]["role"], "owner");
+    let provisioned_user = first["user"]["id"].as_str().expect("user id").to_string();
+    let provisioned_tenant = first["active_tenant"]["tenant_id"]
+        .as_str()
+        .expect("tenant id")
+        .to_string();
+
+    let me = client
+        .get(format!("{}/v1/me", server.http_base))
+        .bearer_auth(first["access_token"].as_str().expect("access token"))
+        .send()
+        .await
+        .expect("me should return a response");
+    assert_eq!(me.status(), reqwest::StatusCode::OK);
+
+    // Logging in again with the same subject reuses the account and tenant.
+    let again = login("google", format!("google-sub-{run}|{google_email}|true")).await;
+    assert_eq!(again.status(), reqwest::StatusCode::OK);
+    let again: Value = again.json().await.expect("oauth login should be json");
+    assert_eq!(again["user"]["id"], provisioned_user.as_str());
+    assert_eq!(
+        again["active_tenant"]["tenant_id"],
+        provisioned_tenant.as_str()
+    );
+
+    // A new subject with a known verified email links to the existing user.
+    let registered = register_user(&client, &server.http_base, "oauth-link").await;
+    let linked = login(
+        "google",
+        format!("google-linker-{run}|{}|true", registered.email),
+    )
+    .await;
+    assert_eq!(linked.status(), reqwest::StatusCode::OK);
+    let linked: Value = linked.json().await.expect("oauth login should be json");
+    assert_eq!(linked["user"]["id"], registered.user_id.as_str());
+    assert_eq!(
+        linked["active_tenant"]["tenant_id"],
+        registered.tenant_id.as_str()
+    );
+
+    // Unverified provider emails cannot link or create accounts.
+    let unverified = login(
+        "google",
+        format!("google-evil-{run}|victim-{run}@example.com|false"),
+    )
+    .await;
+    assert_eq!(unverified.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // GitHub identities resolve the primary verified email via /emails.
+    let github_email = format!("oauth-github-{run}@example.com");
+    let github = login("github", format!("github-sub-{run}|{github_email}|true")).await;
+    assert_eq!(github.status(), reqwest::StatusCode::OK);
+    let github: Value = github.json().await.expect("oauth login should be json");
+    assert_eq!(github["user"]["email"], github_email.as_str());
+    assert_eq!(github["active_tenant"]["role"], "owner");
+
+    // GitHub accounts without a verified email are rejected.
+    let github_unverified = login(
+        "github",
+        format!("github-shadow-{run}|shadow-{run}@example.com|false"),
+    )
+    .await;
+    assert_eq!(github_unverified.status(), reqwest::StatusCode::FORBIDDEN);
+}

@@ -27,6 +27,14 @@ pub(super) struct LoginRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct OAuthLoginRequest {
+    pub(super) code: String,
+    pub(super) redirect_uri: String,
+    pub(super) tenant_id: Option<Uuid>,
+    pub(super) tenant_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct RefreshRequest {
     pub(super) refresh_token: String,
     pub(super) tenant_id: Option<Uuid>,

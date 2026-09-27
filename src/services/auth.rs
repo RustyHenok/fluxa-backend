@@ -105,7 +105,7 @@ pub async fn login(
 
 /// Rejects users with unverified email addresses when
 /// `REQUIRE_EMAIL_VERIFICATION` is enabled.
-fn ensure_email_verified(state: &AppState, user: &UserRecord) -> AppResult<()> {
+pub(super) fn ensure_email_verified(state: &AppState, user: &UserRecord) -> AppResult<()> {
     if state.config.require_email_verification && user.email_verified_at.is_none() {
         return Err(AppError::Forbidden("email address is not verified".into()));
     }
@@ -265,7 +265,7 @@ pub async fn list_tenant_members(
     state.db.list_tenant_members(requested_tenant_id).await
 }
 
-async fn issue_session(
+pub(super) async fn issue_session(
     state: &AppState,
     user: UserRecord,
     membership: MembershipRecord,
@@ -294,7 +294,7 @@ async fn issue_session(
     })
 }
 
-async fn resolve_membership(
+pub(super) async fn resolve_membership(
     state: &AppState,
     user_id: Uuid,
     tenant_id: Option<Uuid>,

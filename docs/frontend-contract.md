@@ -38,6 +38,14 @@ Both clients should use the REST API. The gRPC surface stays internal-only.
 - `POST /v1/auth/login`
 - optional `tenant_id` lets the client log directly into a selected tenant membership
 
+### OAuth login
+
+- `POST /v1/auth/oauth/:provider` with `{ "code", "redirect_uri", "tenant_id"?, "tenant_name"? }`
+- supported providers: `google` and `github`; each must be configured server-side with `OAUTH_<PROVIDER>_CLIENT_ID` / `OAUTH_<PROVIDER>_CLIENT_SECRET`, otherwise the endpoint returns `400`
+- the client runs the provider's authorization-code flow and posts the resulting `code` (plus the `redirect_uri` used to obtain it); the backend exchanges the code, resolves the identity, and returns the same `AuthResponse` as `POST /v1/auth/login`
+- a known provider identity signs into its linked account; an unknown identity is linked to the existing account with the same verified email, or a brand-new account and workspace are provisioned (role `owner`, email pre-verified)
+- identities whose provider email is unverified are rejected with `403`; OAuth-provisioned accounts have a random unusable password until the password reset flow is used
+
 ### Refresh
 
 - `POST /v1/auth/refresh`
@@ -372,7 +380,6 @@ Those scripts copy the checked-in backend contract into each frontend repo under
 
 The contract is ready for client work, but these are still follow-up improvements rather than blockers:
 
-- OAuth/social login is deferred; the `oauth_accounts` table exists but no endpoints are exposed yet
 - generated TypeScript client in `fluxa-web`
 - generated Dart client in `fluxa-mobile`
 - browser session/BFF implementation in the web repo

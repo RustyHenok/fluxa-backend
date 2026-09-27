@@ -52,6 +52,7 @@ fn router(state: AppState) -> AppResult<Router> {
     let auth_routes = Router::new()
         .route("/auth/register", post(handlers::register))
         .route("/auth/login", post(handlers::login))
+        .route("/auth/oauth/:provider", post(handlers::oauth_login))
         .route("/auth/refresh", post(handlers::refresh))
         .route("/auth/logout", post(handlers::logout))
         .route("/auth/verify-email", post(handlers::verify_email))

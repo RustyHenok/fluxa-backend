@@ -35,6 +35,10 @@ pub struct TestServer {
 
 impl TestServer {
     pub async fn start() -> Self {
+        Self::start_with_env(&[]).await
+    }
+
+    pub async fn start_with_env(extra_env: &[(&str, String)]) -> Self {
         let http_port = free_port();
         let grpc_port = free_port();
         let http_base = format!("http://127.0.0.1:{http_port}");
@@ -46,9 +50,12 @@ impl TestServer {
         let stdout = File::create(&stdout_path).expect("failed to create test stdout log");
         let stderr = File::create(&stderr_path).expect("failed to create test stderr log");
 
-        let child = Command::new(test_binary())
-            .arg("--mode")
-            .arg("all")
+        let mut command = Command::new(test_binary());
+        command.arg("--mode").arg("all");
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
+        let child = command
             .env(
                 "DATABASE_URL",
                 std::env::var("TEST_DATABASE_URL")

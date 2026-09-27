@@ -100,6 +100,34 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/auth/oauth/{provider}": {
+                "post": {
+                    "tags": ["auth"],
+                    "operationId": "oauthLogin",
+                    "summary": "Authenticate with an OAuth provider",
+                    "description": "Exchanges an authorization code with the provider (`google` or `github`) and signs the user in. A first-time identity is linked to an existing account with the same verified email, or a new account and workspace are provisioned. Providers must be configured server-side via OAUTH_<PROVIDER>_CLIENT_ID/SECRET.",
+                    "security": [],
+                    "parameters": [
+                        json!({
+                            "name": "provider",
+                            "in": "path",
+                            "required": true,
+                            "description": "OAuth provider name (google or github).",
+                            "schema": { "type": "string", "enum": ["google", "github"] }
+                        })
+                    ],
+                    "requestBody": json_request_body(schema_ref("OAuthLoginRequest"), true),
+                    "responses": {
+                        "200": json_response("Login succeeded.", schema_ref("AuthResponse")),
+                        "400": error_response("Unsupported or unconfigured provider, or invalid payload."),
+                        "401": error_response("The provider rejected the authorization code or returned an unusable identity."),
+                        "403": error_response("The provider email address is not verified."),
+                        "409": error_response("The provider identity is already linked."),
+                        "429": error_response("Too many login attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/auth/refresh": {
                 "post": {
                     "tags": ["auth"],
@@ -1622,6 +1650,16 @@ pub fn document() -> Value {
                         "email": string_schema(),
                         "password": string_schema(),
                         "tenant_id": nullable(uuid_schema())
+                    }
+                },
+                "OAuthLoginRequest": {
+                    "type": "object",
+                    "required": ["code", "redirect_uri"],
+                    "properties": {
+                        "code": string_schema(),
+                        "redirect_uri": string_schema(),
+                        "tenant_id": nullable(uuid_schema()),
+                        "tenant_name": nullable(string_schema())
                     }
                 },
                 "RefreshRequest": {

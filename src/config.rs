@@ -104,6 +104,38 @@ pub struct Cli {
     pub otel_exporter_otlp_endpoint: Option<String>,
     #[arg(long, env = "OTEL_SERVICE_NAME", default_value = "fluxa-backend")]
     pub otel_service_name: String,
+    #[arg(long, env = "OAUTH_GOOGLE_CLIENT_ID")]
+    pub oauth_google_client_id: Option<String>,
+    #[arg(long, env = "OAUTH_GOOGLE_CLIENT_SECRET")]
+    pub oauth_google_client_secret: Option<String>,
+    #[arg(
+        long,
+        env = "OAUTH_GOOGLE_TOKEN_URL",
+        default_value = "https://oauth2.googleapis.com/token"
+    )]
+    pub oauth_google_token_url: String,
+    #[arg(
+        long,
+        env = "OAUTH_GOOGLE_USERINFO_URL",
+        default_value = "https://openidconnect.googleapis.com/v1/userinfo"
+    )]
+    pub oauth_google_userinfo_url: String,
+    #[arg(long, env = "OAUTH_GITHUB_CLIENT_ID")]
+    pub oauth_github_client_id: Option<String>,
+    #[arg(long, env = "OAUTH_GITHUB_CLIENT_SECRET")]
+    pub oauth_github_client_secret: Option<String>,
+    #[arg(
+        long,
+        env = "OAUTH_GITHUB_TOKEN_URL",
+        default_value = "https://github.com/login/oauth/access_token"
+    )]
+    pub oauth_github_token_url: String,
+    #[arg(
+        long,
+        env = "OAUTH_GITHUB_USERINFO_URL",
+        default_value = "https://api.github.com/user"
+    )]
+    pub oauth_github_userinfo_url: String,
     #[arg(long, env = "RETENTION_SWEEP_INTERVAL_HOURS", default_value_t = 24)]
     pub retention_sweep_interval_hours: i64,
     #[arg(long, env = "REFRESH_TOKEN_RETENTION_DAYS", default_value_t = 30)]
@@ -346,6 +378,38 @@ impl Cli {
             .filter(|value| !value.is_empty())
     }
 
+    /// Returns the OAuth settings for a supported provider when both the
+    /// client id and secret are configured with non-empty values. Unknown
+    /// providers and unconfigured providers return `None`.
+    pub fn oauth_provider(&self, provider: &str) -> Option<OAuthProviderSettings<'_>> {
+        let (client_id, client_secret, token_url, userinfo_url) = match provider {
+            "google" => (
+                self.oauth_google_client_id.as_deref(),
+                self.oauth_google_client_secret.as_deref(),
+                self.oauth_google_token_url.as_str(),
+                self.oauth_google_userinfo_url.as_str(),
+            ),
+            "github" => (
+                self.oauth_github_client_id.as_deref(),
+                self.oauth_github_client_secret.as_deref(),
+                self.oauth_github_token_url.as_str(),
+                self.oauth_github_userinfo_url.as_str(),
+            ),
+            _ => return None,
+        };
+
+        let client_id = client_id.map(str::trim).filter(|value| !value.is_empty())?;
+        let client_secret = client_secret
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        Some(OAuthProviderSettings {
+            client_id,
+            client_secret,
+            token_url,
+            userinfo_url,
+        })
+    }
+
     pub fn email_verification_ttl(&self) -> Duration {
         Duration::from_secs((self.email_verification_ttl_hours * 60 * 60) as u64)
     }
@@ -364,3 +428,12 @@ impl Cli {
 }
 
 pub type SharedConfig = Arc<Cli>;
+
+/// Resolved OAuth client settings for a single provider.
+#[derive(Debug, Clone, Copy)]
+pub struct OAuthProviderSettings<'a> {
+    pub client_id: &'a str,
+    pub client_secret: &'a str,
+    pub token_url: &'a str,
+    pub userinfo_url: &'a str,
+}
