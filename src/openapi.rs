@@ -466,7 +466,7 @@ pub fn document() -> Value {
                     "tags": ["tenants"],
                     "operationId": "createTenantInvitation",
                     "summary": "Invite a user to the active tenant",
-                    "description": "Requires owner or admin role; inviting an admin requires the owner role. The response includes the single-use invitation token exactly once. Until email delivery lands, the inviter distributes this token out of band (interim behavior).",
+                    "description": "Requires owner or admin role; inviting an admin requires the owner role. The response includes the single-use invitation token exactly once, and an invitation email with the token is queued for the recipient.",
                     "parameters": [
                         path_uuid_parameter("tenant_id", "Tenant identifier."),
                         idempotency_header_parameter()

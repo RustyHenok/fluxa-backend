@@ -153,8 +153,8 @@ pub fn render_notification(notification: &NotificationRecord) -> AppResult<MailM
             to: notification.recipient.clone(),
             subject: "Verify your email address".into(),
             body: format!(
-                "Use this code to verify your email address: {}\n\
-                 The code expires at {}.",
+                "Use this token to verify your email address: {}\n\
+                 The token expires at {}.",
                 payload_str(payload, "token"),
                 payload_str(payload, "expires_at"),
             ),
@@ -163,8 +163,8 @@ pub fn render_notification(notification: &NotificationRecord) -> AppResult<MailM
             to: notification.recipient.clone(),
             subject: "Reset your password".into(),
             body: format!(
-                "Use this code to reset your password: {}\n\
-                 The code expires at {}. If you did not request this, ignore this message.",
+                "Use this token to reset your password: {}\n\
+                 The token expires at {}. If you did not request this, ignore this message.",
                 payload_str(payload, "token"),
                 payload_str(payload, "expires_at"),
             ),
