@@ -765,6 +765,26 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver": {
+                "post": {
+                    "tags": ["webhooks"],
+                    "operationId": "redeliverWebhookDelivery",
+                    "summary": "Redeliver a webhook delivery",
+                    "description": "Admin/owner only. Requeues a delivered or dead_letter delivery with a fresh attempt budget; the worker retries it on its next dispatch cycle. Pending deliveries cannot be requeued.",
+                    "parameters": [
+                        path_uuid_parameter("webhook_id", "Webhook identifier."),
+                        path_uuid_parameter("delivery_id", "Delivery identifier.")
+                    ],
+                    "responses": {
+                        "202": json_response("Delivery requeued for dispatch.", schema_ref("WebhookDeliveryResponse")),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "404": error_response("Webhook or delivery was not found."),
+                        "409": error_response("The delivery is already pending."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/tasks": {
                 "get": {
                     "tags": ["tasks"],

@@ -243,6 +243,51 @@ impl Database {
         Ok(())
     }
 
+    /// Requeues a completed (`delivered` or `dead_letter`) delivery for a
+    /// fresh round of attempts. Pending deliveries are left untouched.
+    pub async fn redeliver_webhook_delivery(
+        &self,
+        tenant_id: Uuid,
+        webhook_id: Uuid,
+        delivery_id: Uuid,
+    ) -> AppResult<WebhookDeliveryRecord> {
+        let requeued = sqlx::query_as::<_, WebhookDeliveryRecord>(&format!(
+            r#"
+            UPDATE webhook_deliveries
+            SET status = $4, attempts = 0, scheduled_at = now(), delivered_at = NULL, last_error = NULL
+            WHERE tenant_id = $1 AND webhook_id = $2 AND id = $3
+              AND status IN ('delivered', '{WEBHOOK_DELIVERY_STATUS_DEAD_LETTER}')
+            RETURNING {WEBHOOK_DELIVERY_COLUMNS}
+            "#,
+        ))
+        .bind(tenant_id)
+        .bind(webhook_id)
+        .bind(delivery_id)
+        .bind(WEBHOOK_DELIVERY_STATUS_PENDING)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(delivery) = requeued {
+            return Ok(delivery);
+        }
+
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM webhook_deliveries WHERE tenant_id = $1 AND webhook_id = $2 AND id = $3",
+        )
+        .bind(tenant_id)
+        .bind(webhook_id)
+        .bind(delivery_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match existing {
+            Some(_) => Err(AppError::Conflict(
+                "delivery is already pending and will be attempted shortly".into(),
+            )),
+            None => Err(AppError::NotFound("webhook delivery not found".into())),
+        }
+    }
+
     /// Loads the signing secret for a delivery's webhook, if it still exists.
     pub async fn get_webhook_secret(&self, webhook_id: Uuid) -> AppResult<Option<String>> {
         sqlx::query_scalar::<_, String>("SELECT secret FROM webhooks WHERE id = $1")

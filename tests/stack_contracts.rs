@@ -2861,6 +2861,83 @@ async fn webhooks_sign_and_deliver_task_events() {
         .expect("member deliveries list should return a response");
     assert_eq!(member_deliveries.status(), reqwest::StatusCode::FORBIDDEN);
 
+    // A delivered delivery can be requeued and is delivered again.
+    let page: Value = client
+        .get(&deliveries_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("deliveries list should return a response")
+        .json()
+        .await
+        .expect("deliveries list should be json");
+    let delivered_id = page["data"]
+        .as_array()
+        .expect("deliveries data array")
+        .iter()
+        .find(|row| row["event_type"] == "task_created" && row["status"] == "delivered")
+        .and_then(|row| row["id"].as_str())
+        .expect("a delivered task_created delivery should exist")
+        .to_string();
+    let hits_before_redeliver = receiver
+        .hits
+        .lock()
+        .expect("receiver mutex should not be poisoned")
+        .len();
+
+    let redeliver_url = format!("{deliveries_url}/{delivered_id}/redeliver");
+    let member_redeliver = client
+        .post(&redeliver_url)
+        .bearer_auth(&member_token)
+        .send()
+        .await
+        .expect("member redeliver should return a response");
+    assert_eq!(member_redeliver.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let missing_redeliver = client
+        .post(format!(
+            "{deliveries_url}/{}/redeliver",
+            uuid::Uuid::new_v4()
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("unknown redeliver should return a response");
+    assert_eq!(missing_redeliver.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let redelivered = client
+        .post(&redeliver_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("redeliver should return a response");
+    assert_eq!(redelivered.status(), reqwest::StatusCode::ACCEPTED);
+    let requeued: Value = redelivered
+        .json()
+        .await
+        .expect("redeliver response should be json");
+    assert_eq!(requeued["id"], delivered_id.as_str());
+    assert_eq!(requeued["status"], "pending");
+    assert_eq!(requeued["attempts"], 0);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let redelivered_hit = receiver
+            .hits
+            .lock()
+            .expect("receiver mutex should not be poisoned")
+            .len()
+            > hits_before_redeliver;
+        if redelivered_hit {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "requeued delivery should be posted to the receiver again"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
     // Disable, then delete the webhook.
     let disabled: Value = client
         .patch(format!("{webhooks_url}/{webhook_id}"))

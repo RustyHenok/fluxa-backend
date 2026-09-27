@@ -6602,6 +6602,100 @@
           "webhooks"
         ]
       }
+    },
+    "/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver": {
+      "post": {
+        "description": "Admin/owner only. Requeues a delivered or dead_letter delivery with a fresh attempt budget; the worker retries it on its next dispatch cycle. Pending deliveries cannot be requeued.",
+        "operationId": "redeliverWebhookDelivery",
+        "parameters": [
+          {
+            "description": "Webhook identifier.",
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Delivery identifier.",
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDeliveryResponse"
+                }
+              }
+            },
+            "description": "Delivery requeued for dispatch."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The active role cannot manage webhooks."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Webhook or delivery was not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The delivery is already pending."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Redeliver a webhook delivery",
+        "tags": [
+          "webhooks"
+        ]
+      }
     }
   },
   "security": [

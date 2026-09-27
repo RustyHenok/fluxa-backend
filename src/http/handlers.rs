@@ -849,6 +849,25 @@ pub(super) async fn list_webhook_deliveries(
     }))
 }
 
+pub(super) async fn redeliver_webhook_delivery(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((webhook_id, delivery_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<(StatusCode, Json<WebhookDeliveryResponse>)> {
+    ensure_admin_role(user.role)?;
+    let delivery = webhook_service::redeliver_webhook_delivery(
+        &state,
+        user.tenant_id,
+        webhook_id,
+        delivery_id,
+    )
+    .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(WebhookDeliveryResponse::from(&delivery)),
+    ))
+}
+
 pub(super) async fn list_task_comments(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,

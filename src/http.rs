@@ -143,6 +143,10 @@ fn router(state: AppState) -> AppResult<Router> {
             get(handlers::list_webhook_deliveries),
         )
         .route(
+            "/webhooks/:webhook_id/deliveries/:delivery_id/redeliver",
+            post(handlers::redeliver_webhook_delivery),
+        )
+        .route(
             "/tasks",
             get(handlers::list_tasks).post(handlers::create_task),
         )

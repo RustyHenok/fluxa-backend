@@ -99,6 +99,21 @@ pub async fn list_webhook_deliveries(
     })
 }
 
+/// Requeues a completed or dead-lettered delivery so the dispatcher retries
+/// it with a fresh attempt budget.
+pub async fn redeliver_webhook_delivery(
+    state: &AppState,
+    tenant_id: Uuid,
+    webhook_id: Uuid,
+    delivery_id: Uuid,
+) -> AppResult<WebhookDeliveryRecord> {
+    state.db.get_webhook(tenant_id, webhook_id).await?;
+    state
+        .db
+        .redeliver_webhook_delivery(tenant_id, webhook_id, delivery_id)
+        .await
+}
+
 /// Queues an event for all subscribed webhooks. Failures are logged and
 /// swallowed so webhook fan-out never breaks the primary operation.
 pub async fn emit_task_event(

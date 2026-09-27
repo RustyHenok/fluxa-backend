@@ -282,6 +282,7 @@ Client expectation:
 - deliveries POST a JSON body `{ "id": delivery_id, "event": ..., "created_at": ..., "data": TaskResponse }` with headers `X-Fluxa-Event`, `X-Fluxa-Delivery`, and `X-Fluxa-Signature: sha256=<hex hmac-sha256(secret, raw body)>`
 - receivers should verify the signature with a constant-time comparison and respond with a 2xx status; failures are retried with exponential backoff up to 5 attempts, then parked as `dead_letter`
 - `GET /v1/webhooks/:webhook_id/deliveries` pages the delivery history (`data` + `next_cursor`, `limit` 1–100, default 20) with per-delivery `status` (`pending` / `delivered` / `dead_letter`), `attempts`, and `last_error`
+- `POST /v1/webhooks/:webhook_id/deliveries/:delivery_id/redeliver` requeues a `delivered` or `dead_letter` delivery with a fresh attempt budget and responds `202` with the pending delivery; requeuing an already-`pending` delivery returns `409`
 - `PATCH /v1/webhooks/:webhook_id` updates `url`, `events`, and/or `is_active`; disabled webhooks stop receiving new events
 
 ### Jobs / Exports
