@@ -38,6 +38,9 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 - `GET /v1/me/tenants`
 - `GET /v1/me/oauth-accounts`
 - `DELETE /v1/me/oauth-accounts/:provider`
+- `GET /v1/me/sessions`
+- `DELETE /v1/me/sessions`
+- `DELETE /v1/me/sessions/:session_id`
 - `POST /v1/me/change-password`
 - `POST /v1/me/change-email`
 - `GET /v1/audit`

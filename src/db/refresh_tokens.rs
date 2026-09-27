@@ -140,4 +140,46 @@ impl Database {
         .await?;
         Ok(())
     }
+
+    /// Lists the user's active (unrevoked, unexpired) refresh sessions,
+    /// newest first.
+    pub async fn list_active_refresh_tokens(
+        &self,
+        user_id: Uuid,
+    ) -> AppResult<Vec<RefreshTokenRecord>> {
+        sqlx::query_as::<_, RefreshTokenRecord>(
+            r#"
+            SELECT id, user_id, tenant_id, expires_at, revoked_at, replaced_by, created_at
+            FROM refresh_tokens
+            WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::from)
+    }
+
+    /// Revokes one of the user's active refresh sessions. Returns whether an
+    /// active session was found.
+    pub async fn revoke_user_refresh_token(
+        &self,
+        user_id: Uuid,
+        token_id: Uuid,
+    ) -> AppResult<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_tokens
+            SET revoked_at = $3
+            WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > NOW()
+            "#,
+        )
+        .bind(token_id)
+        .bind(user_id)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }

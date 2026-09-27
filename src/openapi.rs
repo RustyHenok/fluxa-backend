@@ -315,6 +315,53 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/me/sessions": {
+                "get": {
+                    "tags": ["account"],
+                    "operationId": "listSessions",
+                    "summary": "List the current user's active sessions",
+                    "description": "Returns active refresh sessions across all tenants, newest first.",
+                    "responses": {
+                        "200": {
+                            "description": "Active refresh sessions for the authenticated user.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("SessionResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["account"],
+                    "operationId": "logoutAllSessions",
+                    "summary": "Log out everywhere",
+                    "description": "Revokes every refresh session for the user and the current access token. Access tokens issued to other devices stay valid until their short TTL expires.",
+                    "responses": {
+                        "204": no_content_response("All sessions revoked."),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/sessions/{session_id}": {
+                "delete": {
+                    "tags": ["account"],
+                    "operationId": "revokeSession",
+                    "summary": "Revoke one of the current user's sessions",
+                    "parameters": [
+                        path_uuid_parameter("session_id", "Refresh session identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Session revoked."),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("No active session with this id belongs to the user."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/dashboard/summary": {
                 "get": {
                     "tags": ["tasks"],
@@ -1711,6 +1758,16 @@ pub fn document() -> Value {
                     "properties": {
                         "provider": { "type": "string", "enum": ["google", "github"] },
                         "linked_at": date_time_schema()
+                    }
+                },
+                "SessionResponse": {
+                    "type": "object",
+                    "required": ["id", "tenant_id", "created_at", "expires_at"],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "tenant_id": uuid_schema(),
+                        "created_at": date_time_schema(),
+                        "expires_at": date_time_schema()
                     }
                 },
                 "RefreshRequest": {

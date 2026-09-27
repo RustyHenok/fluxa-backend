@@ -41,9 +41,9 @@ use super::dto::{
     LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload, OAuthAccountResponse,
     OAuthLoginRequest, PasswordResetConfirmPayload, PasswordResetRequestPayload,
     ProjectPatchPayload, ProjectPayload, RefreshRequest, RegisterRequest,
-    ResendVerificationPayload, SwitchTenantRequest, TaskAuditListResponse, TaskAuditQuery,
-    TaskLabelsPayload, TaskListQuery, TaskListResponse, TaskPatchPayload, TaskPayload,
-    VerifyEmailPayload, WebhookCreateResponse, WebhookDeliveryListQuery,
+    ResendVerificationPayload, SessionResponse, SwitchTenantRequest, TaskAuditListResponse,
+    TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse, TaskPatchPayload,
+    TaskPayload, VerifyEmailPayload, WebhookCreateResponse, WebhookDeliveryListQuery,
     WebhookDeliveryListResponse, WebhookPatchPayload, WebhookPayload,
 };
 use super::helpers::{
@@ -341,6 +341,43 @@ pub(super) async fn unlink_oauth_account(
 ) -> AppResult<StatusCode> {
     let provider = provider.trim().to_ascii_lowercase();
     oauth_service::unlink_oauth_account(&state, user.tenant_id, user.user_id, &provider).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn list_sessions(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<Vec<SessionResponse>>> {
+    let sessions = auth_service::list_sessions(&state, user.user_id).await?;
+    Ok(Json(
+        sessions
+            .into_iter()
+            .map(|session| SessionResponse {
+                id: session.id,
+                tenant_id: session.tenant_id,
+                created_at: session.created_at,
+                expires_at: session.expires_at,
+            })
+            .collect(),
+    ))
+}
+
+pub(super) async fn revoke_session(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(session_id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    auth_service::revoke_session(&state, user.tenant_id, user.user_id, session_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn logout_all_sessions(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+) -> AppResult<StatusCode> {
+    let access_token = bearer_token(&headers)?;
+    auth_service::logout_all(&state, user.tenant_id, user.user_id, access_token).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

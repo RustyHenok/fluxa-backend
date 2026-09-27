@@ -102,6 +102,12 @@ Both clients should use the REST API. The gRPC surface stays internal-only.
 - `POST /v1/me/change-password` with `{ "current_password": "...", "new_password": "..." }` → `204`; revokes all refresh tokens — clients should treat this as a global logout and re-authenticate
 - `POST /v1/me/change-email` with `{ "current_password": "...", "new_email": "..." }` → `200` with the updated `user`; the new address starts unverified and receives a verification email
 
+### Sessions (authenticated)
+
+- `GET /v1/me/sessions` → active refresh sessions across all tenants, newest first, as `[{ "id", "tenant_id", "created_at", "expires_at" }]`
+- `DELETE /v1/me/sessions/:session_id` → `204` revokes one session (`404` when the id is not one of the caller's active sessions)
+- `DELETE /v1/me/sessions` → `204` "log out everywhere": revokes every refresh session and the current access token; access tokens on other devices stay valid until their short TTL expires
+
 ### Password policy
 
 - 10–128 characters; a small list of very common passwords is rejected with `400 validation_error`
@@ -182,6 +188,9 @@ Client expectation:
 - `GET /v1/me/tenants`
 - `GET /v1/me/oauth-accounts`
 - `DELETE /v1/me/oauth-accounts/:provider`
+- `GET /v1/me/sessions`
+- `DELETE /v1/me/sessions`
+- `DELETE /v1/me/sessions/:session_id`
 - `POST /v1/me/change-password`
 - `POST /v1/me/change-email`
 - `GET /v1/tenants/:tenant_id/members`

@@ -196,6 +196,14 @@ pub(super) struct OAuthAccountResponse {
     pub(super) linked_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Serialize)]
+pub(super) struct SessionResponse {
+    pub(super) id: Uuid,
+    pub(super) tenant_id: Uuid,
+    pub(super) created_at: chrono::DateTime<chrono::Utc>,
+    pub(super) expires_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct TaskListResponse {
     pub(super) data: Vec<TaskResponse>,

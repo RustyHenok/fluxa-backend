@@ -83,6 +83,11 @@ fn router(state: AppState) -> AppResult<Router> {
             "/me/oauth-accounts/:provider",
             delete(handlers::unlink_oauth_account),
         )
+        .route(
+            "/me/sessions",
+            get(handlers::list_sessions).delete(handlers::logout_all_sessions),
+        )
+        .route("/me/sessions/:session_id", delete(handlers::revoke_session))
         .route("/me/change-password", post(handlers::change_password))
         .route("/me/change-email", post(handlers::change_email))
         .route("/audit", get(handlers::list_audit_events))

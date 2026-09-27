@@ -3217,3 +3217,136 @@ async fn oauth_login_provisions_links_and_rejects_unverified() {
     let relinked: Value = relinked.json().await.expect("oauth login should be json");
     assert_eq!(relinked["user"]["id"], registered.user_id.as_str());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn session_management_lists_revokes_and_logs_out_everywhere() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "sessions").await;
+
+    // A second login opens a second session.
+    let second_login = client
+        .post(format!("{}/v1/auth/login", server.http_base))
+        .json(&json!({ "email": owner.email, "password": "supersecret123" }))
+        .send()
+        .await
+        .expect("login should return a response");
+    assert_eq!(second_login.status(), reqwest::StatusCode::OK);
+    let second_login: Value = second_login.json().await.expect("login should be json");
+    let second_refresh = second_login["refresh_token"]
+        .as_str()
+        .expect("refresh token")
+        .to_string();
+    let second_access = second_login["access_token"]
+        .as_str()
+        .expect("access token")
+        .to_string();
+
+    // Both sessions are listed, newest first, scoped to the tenant.
+    let sessions_url = format!("{}/v1/me/sessions", server.http_base);
+    let sessions = client
+        .get(&sessions_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("sessions should return a response");
+    assert_eq!(sessions.status(), reqwest::StatusCode::OK);
+    let sessions: Value = sessions.json().await.expect("sessions should be json");
+    let sessions = sessions.as_array().expect("sessions should be an array");
+    assert_eq!(sessions.len(), 2);
+    for session in sessions {
+        assert_eq!(session["tenant_id"], owner.tenant_id.as_str());
+        assert!(session["id"].is_string());
+        assert!(session["created_at"].is_string());
+        assert!(session["expires_at"].is_string());
+    }
+    let newest_session = sessions[0]["id"].as_str().expect("session id").to_string();
+
+    // Another user cannot revoke someone else's session.
+    let outsider = register_user(&client, &server.http_base, "sessions-outsider").await;
+    let cross_revoke = client
+        .delete(format!("{sessions_url}/{newest_session}"))
+        .bearer_auth(&outsider.access_token)
+        .send()
+        .await
+        .expect("revoke should return a response");
+    assert_eq!(cross_revoke.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // Revoking the newest session invalidates the second refresh token.
+    let revoke = client
+        .delete(format!("{sessions_url}/{newest_session}"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("revoke should return a response");
+    assert_eq!(revoke.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let repeat_revoke = client
+        .delete(format!("{sessions_url}/{newest_session}"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("revoke should return a response");
+    assert_eq!(repeat_revoke.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let dead_refresh = client
+        .post(format!("{}/v1/auth/refresh", server.http_base))
+        .json(&json!({ "refresh_token": second_refresh }))
+        .send()
+        .await
+        .expect("refresh should return a response");
+    assert_eq!(dead_refresh.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let remaining = client
+        .get(&sessions_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("sessions should return a response");
+    let remaining: Value = remaining.json().await.expect("sessions should be json");
+    assert_eq!(remaining.as_array().map(Vec::len), Some(1));
+
+    // Logout everywhere revokes all refresh sessions and the current access
+    // token; other access tokens stay valid until their TTL expires.
+    let logout_all = client
+        .delete(&sessions_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("logout everywhere should return a response");
+    assert_eq!(logout_all.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let denied_me = client
+        .get(format!("{}/v1/me", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("me should return a response");
+    assert_eq!(denied_me.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let dead_owner_refresh = client
+        .post(format!("{}/v1/auth/refresh", server.http_base))
+        .json(&json!({ "refresh_token": owner.refresh_token }))
+        .send()
+        .await
+        .expect("refresh should return a response");
+    assert_eq!(
+        dead_owner_refresh.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+
+    let empty_sessions = client
+        .get(&sessions_url)
+        .bearer_auth(&second_access)
+        .send()
+        .await
+        .expect("sessions should return a response");
+    assert_eq!(empty_sessions.status(), reqwest::StatusCode::OK);
+    let empty_sessions: Value = empty_sessions
+        .json()
+        .await
+        .expect("sessions should be json");
+    assert_eq!(empty_sessions.as_array().map(Vec::len), Some(0));
+}

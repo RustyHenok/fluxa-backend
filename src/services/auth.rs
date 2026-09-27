@@ -2,7 +2,7 @@ use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::domain::{MembershipRecord, TenantMemberRecord, UserRecord};
+use crate::domain::{MembershipRecord, RefreshTokenRecord, TenantMemberRecord, UserRecord};
 use crate::error::{AppError, AppResult};
 use crate::services::{account, audit};
 use crate::state::AppState;
@@ -251,6 +251,62 @@ pub async fn me(state: &AppState, user_id: Uuid, tenant_id: Uuid) -> AppResult<C
 
 pub async fn list_tenants(state: &AppState, user_id: Uuid) -> AppResult<Vec<MembershipRecord>> {
     state.db.list_memberships(user_id).await
+}
+
+/// Lists the user's active refresh sessions across all tenants.
+pub async fn list_sessions(state: &AppState, user_id: Uuid) -> AppResult<Vec<RefreshTokenRecord>> {
+    state.db.list_active_refresh_tokens(user_id).await
+}
+
+/// Revokes one of the user's refresh sessions by id.
+pub async fn revoke_session(
+    state: &AppState,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    session_id: Uuid,
+) -> AppResult<()> {
+    let revoked = state
+        .db
+        .revoke_user_refresh_token(user_id, session_id)
+        .await?;
+    if !revoked {
+        return Err(AppError::NotFound("session not found".into()));
+    }
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(user_id),
+        "user",
+        Some(user_id),
+        "auth.session_revoked",
+        json!({ "session_id": session_id }),
+    )
+    .await;
+    Ok(())
+}
+
+/// Revokes every refresh session for the user and denies the current access
+/// token. Access tokens issued to other devices stay valid until their short
+/// TTL expires.
+pub async fn logout_all(
+    state: &AppState,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    access_token: &str,
+) -> AppResult<()> {
+    state.db.revoke_all_user_refresh_tokens(user_id).await?;
+    deny_access_token(state, access_token).await?;
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(user_id),
+        "user",
+        Some(user_id),
+        "auth.logged_out_everywhere",
+        json!({}),
+    )
+    .await;
+    Ok(())
 }
 
 pub async fn list_tenant_members(
