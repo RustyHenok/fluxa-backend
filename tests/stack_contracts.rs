@@ -3016,7 +3016,7 @@ async fn mock_google_userinfo(headers: axum::http::HeaderMap) -> axum::Json<Valu
 async fn mock_github_user(headers: axum::http::HeaderMap) -> axum::Json<Value> {
     let token = mock_bearer(&headers);
     let sub = token.split('|').next().unwrap_or_default().to_string();
-    axum::Json(json!({ "id": 424_242, "login": sub, "email": Value::Null }))
+    axum::Json(json!({ "id": sub, "login": sub, "email": Value::Null }))
 }
 
 async fn mock_github_emails(headers: axum::http::HeaderMap) -> axum::Json<Value> {
