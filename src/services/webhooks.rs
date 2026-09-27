@@ -26,8 +26,8 @@ pub async fn get_webhook(
     state.db.get_webhook(tenant_id, webhook_id).await
 }
 
-/// Registers a webhook and returns the record together with its signing
-/// secret. The secret is only exposed at creation time.
+/// Registers a webhook. The returned [`WebhookRecord`] carries the generated
+/// signing secret; API responses only expose it at creation time.
 pub async fn create_webhook(
     state: &AppState,
     tenant_id: Uuid,

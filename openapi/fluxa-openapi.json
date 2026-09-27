@@ -511,7 +511,7 @@
             "$ref": "#/components/schemas/InvitationResponse"
           },
           "token": {
-            "description": "Single-use invitation token, returned exactly once. Interim behavior until invitation emails are supported.",
+            "description": "Single-use invitation token, returned exactly once. The same token is emailed to the invited address.",
             "type": "string"
           }
         },

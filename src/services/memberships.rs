@@ -18,8 +18,8 @@ pub struct CreatedInvitation {
 /// Creates an invitation for `email` to join `tenant_id` with `role`.
 ///
 /// Only owners and admins may invite; granting the `admin` role requires the
-/// `owner` role. The plaintext token is returned exactly once so the inviter
-/// can distribute it until mailer support lands.
+/// `owner` role. The plaintext token is returned exactly once and is also
+/// queued for delivery to the recipient in an invitation email.
 pub async fn create_invitation(
     state: &AppState,
     tenant_id: Uuid,

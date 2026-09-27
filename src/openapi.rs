@@ -1900,7 +1900,7 @@ pub fn document() -> Value {
                         "invitation": schema_ref("InvitationResponse"),
                         "token": {
                             "type": "string",
-                            "description": "Single-use invitation token, returned exactly once. Interim behavior until invitation emails are supported."
+                            "description": "Single-use invitation token, returned exactly once. The same token is emailed to the invited address."
                         }
                     }
                 },
