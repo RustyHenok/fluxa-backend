@@ -38,12 +38,13 @@ use super::dto::{
     BulkTaskStatusResponse, ChangeEmailPayload, ChangePasswordPayload, CommentListQuery,
     CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest, HealthResponse,
     InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse, LabelPatchPayload,
-    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload, OAuthLoginRequest,
-    PasswordResetConfirmPayload, PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload,
-    RefreshRequest, RegisterRequest, ResendVerificationPayload, SwitchTenantRequest,
-    TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse,
-    TaskPatchPayload, TaskPayload, VerifyEmailPayload, WebhookCreateResponse,
-    WebhookDeliveryListQuery, WebhookDeliveryListResponse, WebhookPatchPayload, WebhookPayload,
+    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload, OAuthAccountResponse,
+    OAuthLoginRequest, PasswordResetConfirmPayload, PasswordResetRequestPayload,
+    ProjectPatchPayload, ProjectPayload, RefreshRequest, RegisterRequest,
+    ResendVerificationPayload, SwitchTenantRequest, TaskAuditListResponse, TaskAuditQuery,
+    TaskLabelsPayload, TaskListQuery, TaskListResponse, TaskPatchPayload, TaskPayload,
+    VerifyEmailPayload, WebhookCreateResponse, WebhookDeliveryListQuery,
+    WebhookDeliveryListResponse, WebhookPatchPayload, WebhookPayload,
 };
 use super::helpers::{
     bearer_token, ensure_active_tenant, ensure_admin_role, ensure_task_write_role, normalize_email,
@@ -315,6 +316,32 @@ pub(super) async fn list_my_tenants(
             .map(TenantMembershipResponse::try_from)
             .collect::<AppResult<Vec<_>>>()?,
     ))
+}
+
+pub(super) async fn list_oauth_accounts(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<Vec<OAuthAccountResponse>>> {
+    let accounts = oauth_service::list_oauth_accounts(&state, user.user_id).await?;
+    Ok(Json(
+        accounts
+            .into_iter()
+            .map(|account| OAuthAccountResponse {
+                provider: account.provider,
+                linked_at: account.created_at,
+            })
+            .collect(),
+    ))
+}
+
+pub(super) async fn unlink_oauth_account(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(provider): Path<String>,
+) -> AppResult<StatusCode> {
+    let provider = provider.trim().to_ascii_lowercase();
+    oauth_service::unlink_oauth_account(&state, user.tenant_id, user.user_id, &provider).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(super) async fn list_tenant_members(

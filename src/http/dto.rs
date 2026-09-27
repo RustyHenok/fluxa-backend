@@ -190,6 +190,12 @@ pub(super) struct MeResponse {
     pub(super) active_tenant: TenantMembershipResponse,
 }
 
+#[derive(Debug, Serialize)]
+pub(super) struct OAuthAccountResponse {
+    pub(super) provider: String,
+    pub(super) linked_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct TaskListResponse {
     pub(super) data: Vec<TaskResponse>,

@@ -13,8 +13,8 @@ pub use attachments::{
     normalize_attachment_content_type, validate_attachment_file_name,
 };
 pub use auth::{
-    InvitationRecord, InvitationResponse, MembershipRecord, MembershipRole, ROLE_ADMIN,
-    ROLE_MEMBER, ROLE_OWNER, RefreshTokenRecord, TOKEN_KIND_EMAIL_VERIFICATION,
+    InvitationRecord, InvitationResponse, MembershipRecord, MembershipRole, OAuthAccountRecord,
+    ROLE_ADMIN, ROLE_MEMBER, ROLE_OWNER, RefreshTokenRecord, TOKEN_KIND_EMAIL_VERIFICATION,
     TOKEN_KIND_PASSWORD_RESET, TenantMemberRecord, TenantMemberResponse, TenantMembershipResponse,
     TenantRecord, UserRecord, UserResponse, UserTokenRecord, validate_role,
 };

@@ -45,6 +45,8 @@ Both clients should use the REST API. The gRPC surface stays internal-only.
 - the client runs the provider's authorization-code flow and posts the resulting `code` (plus the `redirect_uri` used to obtain it); the backend exchanges the code, resolves the identity, and returns the same `AuthResponse` as `POST /v1/auth/login`
 - a known provider identity signs into its linked account; an unknown identity is linked to the existing account with the same verified email, or a brand-new account and workspace are provisioned (role `owner`, email pre-verified)
 - identities whose provider email is unverified are rejected with `403`; OAuth-provisioned accounts have a random unusable password until the password reset flow is used
+- `GET /v1/me/oauth-accounts` (authenticated) lists linked providers as `[{ "provider", "linked_at" }]`
+- `DELETE /v1/me/oauth-accounts/:provider` (authenticated) unlinks a provider (`204`; `404` when nothing is linked); the account stays recoverable through the password reset flow on its verified email
 
 ### Refresh
 
@@ -178,6 +180,8 @@ Client expectation:
 - `POST /v1/auth/switch-tenant`
 - `GET /v1/me`
 - `GET /v1/me/tenants`
+- `GET /v1/me/oauth-accounts`
+- `DELETE /v1/me/oauth-accounts/:provider`
 - `POST /v1/me/change-password`
 - `POST /v1/me/change-email`
 - `GET /v1/tenants/:tenant_id/members`

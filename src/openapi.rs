@@ -272,6 +272,49 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/me/oauth-accounts": {
+                "get": {
+                    "tags": ["account"],
+                    "operationId": "listOauthAccounts",
+                    "summary": "List the current user's linked OAuth accounts",
+                    "responses": {
+                        "200": {
+                            "description": "OAuth provider accounts linked to the authenticated user.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("OAuthAccountResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/oauth-accounts/{provider}": {
+                "delete": {
+                    "tags": ["account"],
+                    "operationId": "unlinkOauthAccount",
+                    "summary": "Unlink an OAuth provider from the current user",
+                    "description": "Removes the provider link. Password reset remains available, so the account stays recoverable via its verified email.",
+                    "parameters": [
+                        {
+                            "name": "provider",
+                            "in": "path",
+                            "required": true,
+                            "description": "OAuth provider name.",
+                            "schema": { "type": "string", "enum": ["google", "github"] }
+                        }
+                    ],
+                    "responses": {
+                        "204": no_content_response("Provider unlinked."),
+                        "400": error_response("Unsupported OAuth provider."),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("No account from this provider is linked."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/dashboard/summary": {
                 "get": {
                     "tags": ["tasks"],
@@ -1660,6 +1703,14 @@ pub fn document() -> Value {
                         "redirect_uri": string_schema(),
                         "tenant_id": nullable(uuid_schema()),
                         "tenant_name": nullable(string_schema())
+                    }
+                },
+                "OAuthAccountResponse": {
+                    "type": "object",
+                    "required": ["provider", "linked_at"],
+                    "properties": {
+                        "provider": { "type": "string", "enum": ["google", "github"] },
+                        "linked_at": date_time_schema()
                     }
                 },
                 "RefreshRequest": {

@@ -4,6 +4,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::config::OAuthProviderSettings;
+use crate::domain::OAuthAccountRecord;
 use crate::error::{AppError, AppResult};
 use crate::services::audit;
 use crate::services::auth::{
@@ -123,6 +124,48 @@ pub async fn oauth_login(
     .await;
     record_login_audit(state, &membership.tenant_id, &user.id, provider).await;
     issue_session(state, user, membership, Uuid::new_v4()).await
+}
+
+/// Lists the OAuth provider identities linked to the user.
+pub async fn list_oauth_accounts(
+    state: &AppState,
+    user_id: Uuid,
+) -> AppResult<Vec<OAuthAccountRecord>> {
+    state.db.list_oauth_accounts(user_id).await
+}
+
+/// Removes the user's link to the given provider. Password reset remains
+/// available for OAuth-provisioned accounts, so unlinking never locks a user
+/// out of their verified email account.
+pub async fn unlink_oauth_account(
+    state: &AppState,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    provider: &str,
+) -> AppResult<()> {
+    if !SUPPORTED_OAUTH_PROVIDERS.contains(&provider) {
+        return Err(AppError::Validation(format!(
+            "unsupported OAuth provider; supported providers: {}",
+            SUPPORTED_OAUTH_PROVIDERS.join(", ")
+        )));
+    }
+    let removed = state.db.unlink_oauth_account(user_id, provider).await?;
+    if !removed {
+        return Err(AppError::NotFound(format!(
+            "no {provider} account is linked to this user"
+        )));
+    }
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(user_id),
+        "user",
+        Some(user_id),
+        "auth.oauth_unlinked",
+        json!({ "provider": provider }),
+    )
+    .await;
+    Ok(())
 }
 
 async fn record_login_audit(state: &AppState, tenant_id: &Uuid, user_id: &Uuid, provider: &str) {

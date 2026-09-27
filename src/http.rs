@@ -78,6 +78,11 @@ fn router(state: AppState) -> AppResult<Router> {
         .route("/dashboard/summary", get(handlers::dashboard_summary))
         .route("/me", get(handlers::me))
         .route("/me/tenants", get(handlers::list_my_tenants))
+        .route("/me/oauth-accounts", get(handlers::list_oauth_accounts))
+        .route(
+            "/me/oauth-accounts/:provider",
+            delete(handlers::unlink_oauth_account),
+        )
         .route("/me/change-password", post(handlers::change_password))
         .route("/me/change-email", post(handlers::change_email))
         .route("/audit", get(handlers::list_audit_events))

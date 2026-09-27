@@ -103,6 +103,12 @@ pub struct RefreshTokenRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct OAuthAccountRecord {
+    pub provider: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct InvitationRecord {
     pub id: Uuid,
     pub tenant_id: Uuid,

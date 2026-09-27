@@ -2,6 +2,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use super::Database;
+use crate::domain::OAuthAccountRecord;
 use crate::error::{AppError, AppResult};
 
 impl Database {
@@ -50,5 +51,27 @@ impl Database {
             ));
         }
         Ok(())
+    }
+
+    /// Lists the provider identities linked to a user.
+    pub async fn list_oauth_accounts(&self, user_id: Uuid) -> AppResult<Vec<OAuthAccountRecord>> {
+        sqlx::query_as::<_, OAuthAccountRecord>(
+            "SELECT provider, created_at FROM oauth_accounts WHERE user_id = $1 ORDER BY provider",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::from)
+    }
+
+    /// Removes a user's link to the given provider. Returns whether a link
+    /// existed.
+    pub async fn unlink_oauth_account(&self, user_id: Uuid, provider: &str) -> AppResult<bool> {
+        let result = sqlx::query("DELETE FROM oauth_accounts WHERE user_id = $1 AND provider = $2")
+            .bind(user_id)
+            .bind(provider)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 }

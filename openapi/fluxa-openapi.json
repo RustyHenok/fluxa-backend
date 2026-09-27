@@ -841,6 +841,26 @@
         ],
         "type": "string"
       },
+      "OAuthAccountResponse": {
+        "properties": {
+          "linked_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "google",
+              "github"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "linked_at"
+        ],
+        "type": "object"
+      },
       "OAuthLoginRequest": {
         "properties": {
           "code": {
@@ -3368,6 +3388,120 @@
           }
         },
         "summary": "Change the current user's password",
+        "tags": [
+          "account"
+        ]
+      }
+    },
+    "/v1/me/oauth-accounts": {
+      "get": {
+        "operationId": "listOauthAccounts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OAuthAccountResponse"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OAuth provider accounts linked to the authenticated user."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "List the current user's linked OAuth accounts",
+        "tags": [
+          "account"
+        ]
+      }
+    },
+    "/v1/me/oauth-accounts/{provider}": {
+      "delete": {
+        "description": "Removes the provider link. Password reset remains available, so the account stays recoverable via its verified email.",
+        "operationId": "unlinkOauthAccount",
+        "parameters": [
+          {
+            "description": "OAuth provider name.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "enum": [
+                "google",
+                "github"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Provider unlinked."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unsupported OAuth provider."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No account from this provider is linked."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Unlink an OAuth provider from the current user",
         "tags": [
           "account"
         ]

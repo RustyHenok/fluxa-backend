@@ -3155,4 +3155,65 @@ async fn oauth_login_provisions_links_and_rejects_unverified() {
     )
     .await;
     assert_eq!(github_unverified.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // Linked providers are listed for the account and can be unlinked.
+    let accounts_url = format!("{}/v1/me/oauth-accounts", server.http_base);
+    let accounts = client
+        .get(&accounts_url)
+        .bearer_auth(&registered.access_token)
+        .send()
+        .await
+        .expect("oauth accounts should return a response");
+    assert_eq!(accounts.status(), reqwest::StatusCode::OK);
+    let accounts: Value = accounts.json().await.expect("accounts should be json");
+    let accounts = accounts.as_array().expect("accounts should be an array");
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0]["provider"], "google");
+    assert!(accounts[0]["linked_at"].is_string());
+
+    let unsupported_unlink = client
+        .delete(format!("{accounts_url}/gitlab"))
+        .bearer_auth(&registered.access_token)
+        .send()
+        .await
+        .expect("unlink should return a response");
+    assert_eq!(
+        unsupported_unlink.status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+
+    let unlink = client
+        .delete(format!("{accounts_url}/google"))
+        .bearer_auth(&registered.access_token)
+        .send()
+        .await
+        .expect("unlink should return a response");
+    assert_eq!(unlink.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let empty = client
+        .get(&accounts_url)
+        .bearer_auth(&registered.access_token)
+        .send()
+        .await
+        .expect("oauth accounts should return a response");
+    let empty: Value = empty.json().await.expect("accounts should be json");
+    assert_eq!(empty.as_array().map(Vec::len), Some(0));
+
+    let missing_unlink = client
+        .delete(format!("{accounts_url}/google"))
+        .bearer_auth(&registered.access_token)
+        .send()
+        .await
+        .expect("unlink should return a response");
+    assert_eq!(missing_unlink.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // The same provider identity can re-link through login after unlinking.
+    let relinked = login(
+        "google",
+        format!("google-linker-{run}|{}|true", registered.email),
+    )
+    .await;
+    assert_eq!(relinked.status(), reqwest::StatusCode::OK);
+    let relinked: Value = relinked.json().await.expect("oauth login should be json");
+    assert_eq!(relinked["user"]["id"], registered.user_id.as_str());
 }
