@@ -841,6 +841,40 @@
         ],
         "type": "string"
       },
+      "NotificationPreferencesPayload": {
+        "description": "Delivery switches; omitted kinds stay unchanged. At least one must be provided.",
+        "properties": {
+          "task_commented": {
+            "type": "boolean"
+          },
+          "task_due_soon": {
+            "type": "boolean"
+          },
+          "task_overdue": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "NotificationPreferencesResponse": {
+        "properties": {
+          "task_commented": {
+            "type": "boolean"
+          },
+          "task_due_soon": {
+            "type": "boolean"
+          },
+          "task_overdue": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task_due_soon",
+          "task_overdue",
+          "task_commented"
+        ],
+        "type": "object"
+      },
       "OAuthAccountResponse": {
         "properties": {
           "linked_at": {
@@ -3496,6 +3530,108 @@
           }
         },
         "summary": "Change the current user's password",
+        "tags": [
+          "account"
+        ]
+      }
+    },
+    "/v1/me/notification-preferences": {
+      "get": {
+        "description": "Delivery switches for optional notification kinds. Security and account mails are always sent.",
+        "operationId": "getNotificationPreferences",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferencesResponse"
+                }
+              }
+            },
+            "description": "Current notification preferences."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Get the current user's notification preferences",
+        "tags": [
+          "account"
+        ]
+      },
+      "patch": {
+        "description": "Omitted kinds stay unchanged; at least one switch must be provided.",
+        "operationId": "updateNotificationPreferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferencesPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferencesResponse"
+                }
+              }
+            },
+            "description": "Updated notification preferences."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Update the current user's notification preferences",
         "tags": [
           "account"
         ]

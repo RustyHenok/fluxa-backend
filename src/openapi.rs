@@ -266,6 +266,41 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/me/notification-preferences": {
+                "get": {
+                    "tags": ["account"],
+                    "operationId": "getNotificationPreferences",
+                    "summary": "Get the current user's notification preferences",
+                    "description": "Delivery switches for optional notification kinds. Security and account mails are always sent.",
+                    "responses": {
+                        "200": json_response(
+                            "Current notification preferences.",
+                            schema_ref("NotificationPreferencesResponse")
+                        ),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "patch": {
+                    "tags": ["account"],
+                    "operationId": "updateNotificationPreferences",
+                    "summary": "Update the current user's notification preferences",
+                    "description": "Omitted kinds stay unchanged; at least one switch must be provided.",
+                    "requestBody": json_request_body(
+                        schema_ref("NotificationPreferencesPayload"),
+                        true
+                    ),
+                    "responses": {
+                        "200": json_response(
+                            "Updated notification preferences.",
+                            schema_ref("NotificationPreferencesResponse")
+                        ),
+                        "400": error_response("Invalid payload."),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/me/tenants": {
                 "get": {
                     "tags": ["auth"],
@@ -1858,6 +1893,24 @@ pub fn document() -> Value {
                             "maxLength": 100,
                             "description": "Display name shown to other members. Send null to clear."
                         }
+                    }
+                },
+                "NotificationPreferencesResponse": {
+                    "type": "object",
+                    "required": ["task_due_soon", "task_overdue", "task_commented"],
+                    "properties": {
+                        "task_due_soon": { "type": "boolean" },
+                        "task_overdue": { "type": "boolean" },
+                        "task_commented": { "type": "boolean" }
+                    }
+                },
+                "NotificationPreferencesPayload": {
+                    "type": "object",
+                    "description": "Delivery switches; omitted kinds stay unchanged. At least one must be provided.",
+                    "properties": {
+                        "task_due_soon": { "type": "boolean" },
+                        "task_overdue": { "type": "boolean" },
+                        "task_commented": { "type": "boolean" }
                     }
                 },
                 "AuditEventResponse": {

@@ -522,6 +522,16 @@ impl Database {
               AND t.due_at <= now() + make_interval(hours => $1::int)
               AND t.status NOT IN ('done', 'archived')
               AND ($3::uuid IS NULL OR t.tenant_id = $3)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM notification_preferences np
+                  WHERE np.user_id = t.assignee_id
+                    AND NOT np.enabled
+                    AND np.kind = CASE
+                        WHEN t.due_at <= now() THEN 'task_overdue'
+                        ELSE 'task_due_soon'
+                    END
+              )
             ORDER BY t.due_at ASC
             LIMIT $2
             "#,

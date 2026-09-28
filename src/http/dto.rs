@@ -190,6 +190,13 @@ pub(super) struct UpdateProfilePayload {
     pub(super) display_name: Option<Option<String>>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub(super) struct NotificationPreferencesPayload {
+    pub(super) task_due_soon: Option<bool>,
+    pub(super) task_overdue: Option<bool>,
+    pub(super) task_commented: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub(super) struct AuditListQuery {
     pub(super) limit: Option<usize>,

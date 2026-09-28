@@ -15,10 +15,10 @@ use crate::domain::{
 use crate::domain::{CommentResponse, validate_comment_body};
 use crate::domain::{
     CreateLabelInput, CreateProjectInput, CreateTaskInput, DashboardSummary, InvitationResponse,
-    JobResponse, JobResultResponse, LabelResponse, PaginatedAuditEvents, ProjectResponse,
-    ProjectSummary, TaskAuditResponse, TaskResponse, TenantMemberResponse,
-    TenantMembershipResponse, UpdateLabelInput, UpdateProjectInput, UpdateTaskInput, UserResponse,
-    validate_role, validate_task_priority, validate_task_status,
+    JobResponse, JobResultResponse, LabelResponse, NotificationPreferencesResponse,
+    PaginatedAuditEvents, ProjectResponse, ProjectSummary, TaskAuditResponse, TaskResponse,
+    TenantMemberResponse, TenantMembershipResponse, UpdateLabelInput, UpdateProjectInput,
+    UpdateTaskInput, UserResponse, validate_role, validate_task_priority, validate_task_status,
 };
 use crate::domain::{WebhookDeliveryResponse, WebhookResponse};
 use crate::error::{AppError, AppResult};
@@ -38,13 +38,14 @@ use super::dto::{
     BulkTaskStatusResponse, ChangeEmailPayload, ChangePasswordPayload, CommentListQuery,
     CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest, HealthResponse,
     InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse, LabelPatchPayload,
-    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload, OAuthAccountResponse,
-    OAuthLoginRequest, PasswordResetConfirmPayload, PasswordResetRequestPayload,
-    ProjectPatchPayload, ProjectPayload, RefreshRequest, RegisterRequest,
-    ResendVerificationPayload, SessionResponse, SwitchTenantRequest, TaskAuditListResponse,
-    TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse, TaskPatchPayload,
-    TaskPayload, UpdateProfilePayload, VerifyEmailPayload, WebhookCreateResponse,
-    WebhookDeliveryListQuery, WebhookDeliveryListResponse, WebhookPatchPayload, WebhookPayload,
+    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
+    NotificationPreferencesPayload, OAuthAccountResponse, OAuthLoginRequest,
+    PasswordResetConfirmPayload, PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload,
+    RefreshRequest, RegisterRequest, ResendVerificationPayload, SessionResponse,
+    SwitchTenantRequest, TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery,
+    TaskListResponse, TaskPatchPayload, TaskPayload, UpdateProfilePayload, VerifyEmailPayload,
+    WebhookCreateResponse, WebhookDeliveryListQuery, WebhookDeliveryListResponse,
+    WebhookPatchPayload, WebhookPayload,
 };
 use super::helpers::{
     bearer_token, ensure_active_tenant, ensure_admin_role, ensure_task_write_role, normalize_email,
@@ -318,6 +319,31 @@ pub(super) async fn update_profile(
     let updated =
         account_service::update_profile(&state, user.tenant_id, user.user_id, display_name).await?;
     Ok(Json(UserResponse::from(&updated)))
+}
+
+pub(super) async fn get_notification_preferences(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<NotificationPreferencesResponse>> {
+    let preferences = account_service::get_notification_preferences(&state, user.user_id).await?;
+    Ok(Json(preferences))
+}
+
+pub(super) async fn update_notification_preferences(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<NotificationPreferencesPayload>,
+) -> AppResult<Json<NotificationPreferencesResponse>> {
+    let preferences = account_service::update_notification_preferences(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        payload.task_due_soon,
+        payload.task_overdue,
+        payload.task_commented,
+    )
+    .await?;
+    Ok(Json(preferences))
 }
 
 pub(super) async fn list_my_tenants(

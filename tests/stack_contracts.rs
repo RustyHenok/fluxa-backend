@@ -3447,3 +3447,176 @@ async fn profile_display_name_updates_and_appears_in_member_list() {
     let cleared: Value = cleared.json().await.expect("update should be json");
     assert!(cleared["display_name"].is_null());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn notification_preferences_control_optional_mail_delivery() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "notify-prefs-owner").await;
+    let member = register_user(&client, &server.http_base, "notify-prefs-member").await;
+
+    let prefs_url = format!("{}/v1/me/notification-preferences", server.http_base);
+
+    // Everything is enabled by default.
+    let defaults = client
+        .get(&prefs_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("preferences fetch should return a response");
+    assert_eq!(defaults.status(), reqwest::StatusCode::OK);
+    let defaults: Value = defaults.json().await.expect("preferences should be json");
+    assert_eq!(defaults["task_due_soon"], true);
+    assert_eq!(defaults["task_overdue"], true);
+    assert_eq!(defaults["task_commented"], true);
+
+    // An empty patch is rejected.
+    let empty = client
+        .patch(&prefs_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("empty patch should return a response");
+    assert_eq!(empty.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Mute comment and due-soon mails; overdue stays on.
+    let muted = client
+        .patch(&prefs_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "task_commented": false, "task_due_soon": false }))
+        .send()
+        .await
+        .expect("preferences patch should return a response");
+    assert_eq!(muted.status(), reqwest::StatusCode::OK);
+    let muted: Value = muted.json().await.expect("patched preferences json");
+    assert_eq!(muted["task_commented"], false);
+    assert_eq!(muted["task_due_soon"], false);
+    assert_eq!(muted["task_overdue"], true);
+
+    let persisted: Value = client
+        .get(&prefs_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("preferences refetch should return a response")
+        .json()
+        .await
+        .expect("refetched preferences json");
+    assert_eq!(persisted["task_commented"], false);
+    assert_eq!(persisted["task_due_soon"], false);
+
+    // A member commenting on the muted owner's assigned task sends nothing.
+    add_membership(&member.user_id, &owner.tenant_id, "member").await;
+    let switched: Value = client
+        .post(format!("{}/v1/auth/switch-tenant", server.http_base))
+        .bearer_auth(&member.access_token)
+        .json(&json!({ "tenant_id": owner.tenant_id }))
+        .send()
+        .await
+        .expect("switch tenant should return a response")
+        .json()
+        .await
+        .expect("switch tenant response should be json");
+    let member_access = switched["access_token"]
+        .as_str()
+        .expect("switch should include access token")
+        .to_string();
+
+    let due_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let task = client
+        .post(format!("{}/v1/tasks", server.http_base))
+        .bearer_auth(&owner.access_token)
+        .header("Idempotency-Key", format!("task-{}", uuid::Uuid::new_v4()))
+        .json(&json!({
+            "title": "Muted reminders task",
+            "status": "open",
+            "priority": "high",
+            "assignee_id": owner.user_id,
+            "due_at": due_at,
+        }))
+        .send()
+        .await
+        .expect("task creation should return a response");
+    assert_eq!(task.status(), reqwest::StatusCode::CREATED);
+    let task: Value = task.json().await.expect("task should be json");
+    let task_id = task["id"].as_str().expect("task id").to_string();
+
+    let comment = client
+        .post(format!(
+            "{}/v1/tasks/{}/comments",
+            server.http_base, task_id
+        ))
+        .bearer_auth(&member_access)
+        .header(
+            "Idempotency-Key",
+            format!("comment-{}", uuid::Uuid::new_v4()),
+        )
+        .json(&json!({ "body": "muted assignee should not be mailed" }))
+        .send()
+        .await
+        .expect("comment create should return a response");
+    assert_eq!(comment.status(), reqwest::StatusCode::CREATED);
+    assert_eq!(
+        count_notifications(&owner.email, "task_commented").await,
+        0,
+        "muted assignee should not receive comment notifications"
+    );
+
+    // The due-soon sweep skips the muted assignee too.
+    let mut job_admin = JobAdminClient::connect(server.grpc_base.clone())
+        .await
+        .expect("grpc job client should connect");
+    let sweep = job_admin
+        .run_due_reminder_sweep(authed_grpc_request(RunDueReminderSweepRequest {
+            tenant_id: owner.tenant_id.clone(),
+        }))
+        .await
+        .expect("RunDueReminderSweep should succeed")
+        .into_inner();
+    poll_job_status(&mut job_admin, &sweep.job_id).await;
+    assert_eq!(
+        count_notifications(&owner.email, "task_due_soon").await,
+        0,
+        "muted assignee should not receive due-soon reminders"
+    );
+
+    // Re-enabling comment mails restores delivery.
+    let restored = client
+        .patch(&prefs_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "task_commented": true }))
+        .send()
+        .await
+        .expect("re-enable patch should return a response");
+    assert_eq!(restored.status(), reqwest::StatusCode::OK);
+    let restored: Value = restored.json().await.expect("restored preferences json");
+    assert_eq!(restored["task_commented"], true);
+    assert_eq!(
+        restored["task_due_soon"], false,
+        "unrelated switches stay unchanged"
+    );
+
+    let second_comment = client
+        .post(format!(
+            "{}/v1/tasks/{}/comments",
+            server.http_base, task_id
+        ))
+        .bearer_auth(&member_access)
+        .header(
+            "Idempotency-Key",
+            format!("comment-{}", uuid::Uuid::new_v4()),
+        )
+        .json(&json!({ "body": "mails are back on" }))
+        .send()
+        .await
+        .expect("second comment should return a response");
+    assert_eq!(second_comment.status(), reqwest::StatusCode::CREATED);
+    assert_eq!(
+        count_notifications(&owner.email, "task_commented").await,
+        1,
+        "re-enabled assignee should receive comment notifications"
+    );
+}

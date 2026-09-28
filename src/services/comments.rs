@@ -38,33 +38,43 @@ pub async fn create_comment(
     if let Some(assignee_id) = task.assignee_id
         && assignee_id != author_id
     {
-        match state.db.get_user_by_id(assignee_id).await {
-            Ok(assignee) => {
-                let enqueued = state
-                    .db
-                    .enqueue_notification(
-                        &NewNotification {
-                            tenant_id: Some(tenant_id),
-                            user_id: Some(assignee_id),
-                            kind: KIND_TASK_COMMENTED.into(),
-                            recipient: assignee.email,
-                            payload: json!({
-                                "task_id": task_id,
-                                "title": task.title,
-                                "comment_id": comment.id,
-                                "body": comment.body,
-                            }),
-                            dedupe_key: None,
-                        },
-                        state.config.max_job_attempts,
-                    )
-                    .await;
-                if let Err(error) = enqueued {
-                    tracing::warn!("failed to enqueue comment notification: {error}");
+        let wants_notification = state
+            .db
+            .is_notification_kind_enabled(assignee_id, KIND_TASK_COMMENTED)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!("failed to load comment notification preference: {error}");
+                true
+            });
+        if wants_notification {
+            match state.db.get_user_by_id(assignee_id).await {
+                Ok(assignee) => {
+                    let enqueued = state
+                        .db
+                        .enqueue_notification(
+                            &NewNotification {
+                                tenant_id: Some(tenant_id),
+                                user_id: Some(assignee_id),
+                                kind: KIND_TASK_COMMENTED.into(),
+                                recipient: assignee.email,
+                                payload: json!({
+                                    "task_id": task_id,
+                                    "title": task.title,
+                                    "comment_id": comment.id,
+                                    "body": comment.body,
+                                }),
+                                dedupe_key: None,
+                            },
+                            state.config.max_job_attempts,
+                        )
+                        .await;
+                    if let Err(error) = enqueued {
+                        tracing::warn!("failed to enqueue comment notification: {error}");
+                    }
                 }
-            }
-            Err(error) => {
-                tracing::warn!("failed to load assignee for comment notification: {error}");
+                Err(error) => {
+                    tracing::warn!("failed to load assignee for comment notification: {error}");
+                }
             }
         }
     }

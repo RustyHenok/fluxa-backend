@@ -108,6 +108,12 @@ Both clients should use the REST API. The gRPC surface stays internal-only.
 - `PATCH /v1/me` with `{ "display_name": "Ada Lovelace" }` → `200` with the updated `user`; 1–100 characters after trimming
 - send `{ "display_name": null }` to clear the name; omitted fields stay unchanged
 
+### Notification preferences (authenticated)
+
+- `GET /v1/me/notification-preferences` → `{ "task_due_soon": bool, "task_overdue": bool, "task_commented": bool }`; everything defaults to `true`
+- `PATCH /v1/me/notification-preferences` with any subset of those switches → `200` with the full updated object; an empty body is a `400`
+- disabled kinds are skipped at enqueue time (due/overdue reminders and comment mails); security and account mails (verification, password reset, invitations) are always sent
+
 ### Sessions (authenticated)
 
 - `GET /v1/me/sessions` → active refresh sessions across all tenants, newest first, as `[{ "id", "tenant_id", "created_at", "expires_at" }]`
@@ -192,6 +198,8 @@ Client expectation:
 - `POST /v1/auth/switch-tenant`
 - `GET /v1/me`
 - `PATCH /v1/me`
+- `GET /v1/me/notification-preferences`
+- `PATCH /v1/me/notification-preferences`
 - `GET /v1/me/tenants`
 - `GET /v1/me/oauth-accounts`
 - `DELETE /v1/me/oauth-accounts/:provider`

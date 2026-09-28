@@ -9,10 +9,14 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::domain::{
-    NewNotification, TOKEN_KIND_EMAIL_VERIFICATION, TOKEN_KIND_PASSWORD_RESET, UserRecord,
+    NewNotification, NotificationPreferencesResponse, TOKEN_KIND_EMAIL_VERIFICATION,
+    TOKEN_KIND_PASSWORD_RESET, UserRecord,
 };
 use crate::error::{AppError, AppResult};
-use crate::notify::{KIND_EMAIL_VERIFICATION, KIND_PASSWORD_RESET};
+use crate::notify::{
+    KIND_EMAIL_VERIFICATION, KIND_PASSWORD_RESET, KIND_TASK_COMMENTED, KIND_TASK_DUE_SOON,
+    KIND_TASK_OVERDUE,
+};
 use crate::services::audit;
 use crate::state::AppState;
 use crate::tokens::{generate_token, hash_token};
@@ -231,6 +235,64 @@ pub async fn update_profile(
     .await;
 
     Ok(updated)
+}
+
+/// Returns the user's delivery switches for optional notification kinds.
+pub async fn get_notification_preferences(
+    state: &AppState,
+    user_id: Uuid,
+) -> AppResult<NotificationPreferencesResponse> {
+    let disabled = state.db.list_disabled_notification_kinds(user_id).await?;
+    Ok(NotificationPreferencesResponse::from_disabled_kinds(
+        &disabled,
+    ))
+}
+
+/// Applies the provided delivery switches. Omitted kinds stay unchanged; at
+/// least one switch must be present.
+pub async fn update_notification_preferences(
+    state: &AppState,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    task_due_soon: Option<bool>,
+    task_overdue: Option<bool>,
+    task_commented: Option<bool>,
+) -> AppResult<NotificationPreferencesResponse> {
+    let changes = [
+        (KIND_TASK_DUE_SOON, task_due_soon),
+        (KIND_TASK_OVERDUE, task_overdue),
+        (KIND_TASK_COMMENTED, task_commented),
+    ];
+
+    if changes.iter().all(|(_, enabled)| enabled.is_none()) {
+        return Err(AppError::Validation(
+            "at least one notification preference must be provided".into(),
+        ));
+    }
+
+    let mut applied = serde_json::Map::new();
+    for (kind, enabled) in changes {
+        if let Some(enabled) = enabled {
+            state
+                .db
+                .set_notification_preference(user_id, kind, enabled)
+                .await?;
+            applied.insert(kind.to_string(), json!(enabled));
+        }
+    }
+
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(user_id),
+        "user",
+        Some(user_id),
+        "account.notification_preferences_updated",
+        json!({ "changes": applied }),
+    )
+    .await;
+
+    get_notification_preferences(state, user_id).await
 }
 
 async fn create_and_enqueue_token(

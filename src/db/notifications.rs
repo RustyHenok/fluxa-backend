@@ -118,4 +118,60 @@ impl Database {
         .await?;
         Ok(())
     }
+
+    /// Lists the notification kinds this user has explicitly disabled.
+    pub async fn list_disabled_notification_kinds(&self, user_id: Uuid) -> AppResult<Vec<String>> {
+        sqlx::query_scalar(
+            r#"
+            SELECT kind
+            FROM notification_preferences
+            WHERE user_id = $1 AND NOT enabled
+            ORDER BY kind
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(crate::error::AppError::from)
+    }
+
+    /// Upserts a delivery switch for one notification kind.
+    pub async fn set_notification_preference(
+        &self,
+        user_id: Uuid,
+        kind: &str,
+        enabled: bool,
+    ) -> AppResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO notification_preferences (user_id, kind, enabled, updated_at)
+            VALUES ($1, $2, $3, now())
+            ON CONFLICT (user_id, kind)
+            DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = now()
+            "#,
+        )
+        .bind(user_id)
+        .bind(kind)
+        .bind(enabled)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Returns whether the user still accepts the given notification kind.
+    /// Absence of a preference row means the kind is enabled.
+    pub async fn is_notification_kind_enabled(&self, user_id: Uuid, kind: &str) -> AppResult<bool> {
+        let enabled: Option<bool> = sqlx::query_scalar(
+            r#"
+            SELECT enabled
+            FROM notification_preferences
+            WHERE user_id = $1 AND kind = $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(kind)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(enabled.unwrap_or(true))
+    }
 }

@@ -36,6 +36,28 @@ pub struct NewNotification {
     pub dedupe_key: Option<String>,
 }
 
+/// Per-user delivery switches for optional notification kinds. Security and
+/// account mails (verification, password reset, invitations) are always sent.
+#[derive(Debug, Clone, Serialize)]
+pub struct NotificationPreferencesResponse {
+    pub task_due_soon: bool,
+    pub task_overdue: bool,
+    pub task_commented: bool,
+}
+
+impl NotificationPreferencesResponse {
+    /// Builds the response from the set of kinds the user has disabled;
+    /// anything absent from the list stays enabled by default.
+    pub fn from_disabled_kinds(disabled: &[String]) -> Self {
+        let is_disabled = |kind: &str| disabled.iter().any(|entry| entry == kind);
+        Self {
+            task_due_soon: !is_disabled(crate::notify::KIND_TASK_DUE_SOON),
+            task_overdue: !is_disabled(crate::notify::KIND_TASK_OVERDUE),
+            task_commented: !is_disabled(crate::notify::KIND_TASK_COMMENTED),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct AuditEventRecord {
     pub id: Uuid,
