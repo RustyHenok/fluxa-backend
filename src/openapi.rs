@@ -251,6 +251,19 @@ pub fn document() -> Value {
                         "401": error_response("Authentication is required."),
                         "500": error_response("Unexpected server error.")
                     }
+                },
+                "patch": {
+                    "tags": ["account"],
+                    "operationId": "updateProfile",
+                    "summary": "Update the current user's profile",
+                    "description": "Omitted fields stay unchanged; send `\"display_name\": null` to clear the name.",
+                    "requestBody": json_request_body(schema_ref("UpdateProfilePayload"), true),
+                    "responses": {
+                        "200": json_response("Updated user profile.", schema_ref("UserResponse")),
+                        "400": error_response("Invalid payload."),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
                 }
             },
             "/v1/me/tenants": {
@@ -1405,10 +1418,11 @@ pub fn document() -> Value {
                 },
                 "UserResponse": {
                     "type": "object",
-                    "required": ["id", "email", "email_verified", "created_at"],
+                    "required": ["id", "email", "display_name", "email_verified", "created_at"],
                     "properties": {
                         "id": uuid_schema(),
                         "email": string_schema(),
+                        "display_name": nullable(string_schema()),
                         "email_verified": { "type": "boolean" },
                         "created_at": date_time_schema()
                     }
@@ -1425,10 +1439,11 @@ pub fn document() -> Value {
                 },
                 "TenantMemberResponse": {
                     "type": "object",
-                    "required": ["user_id", "email", "role", "joined_at"],
+                    "required": ["user_id", "email", "display_name", "role", "joined_at"],
                     "properties": {
                         "user_id": uuid_schema(),
                         "email": string_schema(),
+                        "display_name": nullable(string_schema()),
                         "role": schema_ref("MembershipRole"),
                         "joined_at": date_time_schema()
                     }
@@ -1832,6 +1847,17 @@ pub fn document() -> Value {
                     "properties": {
                         "current_password": string_schema(),
                         "new_email": string_schema()
+                    }
+                },
+                "UpdateProfilePayload": {
+                    "type": "object",
+                    "properties": {
+                        "display_name": {
+                            "type": "string",
+                            "nullable": true,
+                            "maxLength": 100,
+                            "description": "Display name shown to other members. Send null to clear."
+                        }
                     }
                 },
                 "AuditEventResponse": {

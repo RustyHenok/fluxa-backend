@@ -3350,3 +3350,100 @@ async fn session_management_lists_revokes_and_logs_out_everywhere() {
         .expect("sessions should be json");
     assert_eq!(empty_sessions.as_array().map(Vec::len), Some(0));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn profile_display_name_updates_and_appears_in_member_list() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "profile").await;
+    let me_url = format!("{}/v1/me", server.http_base);
+
+    // New accounts start without a display name.
+    let me = client
+        .get(&me_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("me should return a response");
+    let me: Value = me.json().await.expect("me should be json");
+    assert!(me["user"]["display_name"].is_null());
+
+    // Setting a display name trims whitespace and returns the updated user.
+    let updated = client
+        .patch(&me_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "display_name": "  Ada Lovelace  " }))
+        .send()
+        .await
+        .expect("profile update should return a response");
+    assert_eq!(updated.status(), reqwest::StatusCode::OK);
+    let updated: Value = updated.json().await.expect("update should be json");
+    assert_eq!(updated["display_name"], "Ada Lovelace");
+
+    // The name shows up in /v1/me and the tenant member list.
+    let me = client
+        .get(&me_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("me should return a response");
+    let me: Value = me.json().await.expect("me should be json");
+    assert_eq!(me["user"]["display_name"], "Ada Lovelace");
+
+    let members = client
+        .get(format!(
+            "{}/v1/tenants/{}/members",
+            server.http_base, owner.tenant_id
+        ))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("members should return a response");
+    assert_eq!(members.status(), reqwest::StatusCode::OK);
+    let members: Value = members.json().await.expect("members should be json");
+    let members = members.as_array().expect("members should be an array");
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0]["display_name"], "Ada Lovelace");
+
+    // Blank names and over-long names are rejected.
+    let blank = client
+        .patch(&me_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "display_name": "   " }))
+        .send()
+        .await
+        .expect("profile update should return a response");
+    assert_eq!(blank.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let too_long = client
+        .patch(&me_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "display_name": "x".repeat(101) }))
+        .send()
+        .await
+        .expect("profile update should return a response");
+    assert_eq!(too_long.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // An empty patch is rejected; null clears the name.
+    let empty = client
+        .patch(&me_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("profile update should return a response");
+    assert_eq!(empty.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let cleared = client
+        .patch(&me_url)
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "display_name": null }))
+        .send()
+        .await
+        .expect("profile update should return a response");
+    assert_eq!(cleared.status(), reqwest::StatusCode::OK);
+    let cleared: Value = cleared.json().await.expect("update should be json");
+    assert!(cleared["display_name"].is_null());
+}

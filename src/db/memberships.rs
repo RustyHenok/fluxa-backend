@@ -78,6 +78,7 @@ impl Database {
             r#"
             SELECT tm.user_id,
                    u.email,
+                   u.display_name,
                    tm.role,
                    tm.created_at AS joined_at
             FROM tenant_memberships tm
@@ -101,6 +102,7 @@ impl Database {
             r#"
             SELECT tm.user_id,
                    u.email,
+                   u.display_name,
                    tm.role,
                    tm.created_at AS joined_at
             FROM tenant_memberships tm
@@ -131,6 +133,7 @@ impl Database {
               AND u.id = tm.user_id
             RETURNING tm.user_id,
                       u.email,
+                      u.display_name,
                       tm.role,
                       tm.created_at AS joined_at
             "#,

@@ -1457,6 +1457,10 @@
       },
       "TenantMemberResponse": {
         "properties": {
+          "display_name": {
+            "nullable": true,
+            "type": "string"
+          },
           "email": {
             "type": "string"
           },
@@ -1475,6 +1479,7 @@
         "required": [
           "user_id",
           "email",
+          "display_name",
           "role",
           "joined_at"
         ],
@@ -1505,10 +1510,25 @@
         ],
         "type": "object"
       },
+      "UpdateProfilePayload": {
+        "properties": {
+          "display_name": {
+            "description": "Display name shown to other members. Send null to clear.",
+            "maxLength": 100,
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "UserResponse": {
         "properties": {
           "created_at": {
             "format": "date-time",
+            "type": "string"
+          },
+          "display_name": {
+            "nullable": true,
             "type": "string"
           },
           "email": {
@@ -1525,6 +1545,7 @@
         "required": [
           "id",
           "email",
+          "display_name",
           "email_verified",
           "created_at"
         ],
@@ -3290,6 +3311,66 @@
         "summary": "Get the active user profile",
         "tags": [
           "auth"
+        ]
+      },
+      "patch": {
+        "description": "Omitted fields stay unchanged; send `\"display_name\": null` to clear the name.",
+        "operationId": "updateProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfilePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Updated user profile."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication is required."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "summary": "Update the current user's profile",
+        "tags": [
+          "account"
         ]
       }
     },

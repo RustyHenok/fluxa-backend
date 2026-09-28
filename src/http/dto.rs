@@ -12,6 +12,17 @@ use crate::error::AppResult;
 
 use super::helpers::{normalize_optional_choice, parse_optional_datetime};
 
+/// Deserializes a present-but-possibly-null field into `Some(inner)`, so
+/// `Option<Option<T>>` patch fields can tell "field": null (clear) apart from
+/// an omitted field (leave unchanged). Combine with `#[serde(default)]`.
+fn double_option<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct RegisterRequest {
     pub(super) email: String,
@@ -86,12 +97,16 @@ pub(super) struct TaskPayload {
 
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct TaskPatchPayload {
+    #[serde(default, deserialize_with = "double_option")]
     pub(super) project_id: Option<Option<Uuid>>,
     pub(super) title: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
     pub(super) description: Option<Option<String>>,
     pub(super) status: Option<String>,
     pub(super) priority: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
     pub(super) assignee_id: Option<Option<Uuid>>,
+    #[serde(default, deserialize_with = "double_option")]
     pub(super) due_at: Option<Option<DateTime<Utc>>>,
 }
 
@@ -167,6 +182,12 @@ pub(super) struct ChangePasswordPayload {
 pub(super) struct ChangeEmailPayload {
     pub(super) current_password: String,
     pub(super) new_email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct UpdateProfilePayload {
+    #[serde(default, deserialize_with = "double_option")]
+    pub(super) display_name: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -258,6 +279,7 @@ pub(super) struct ProjectPayload {
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct ProjectPatchPayload {
     pub(super) name: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
     pub(super) description: Option<Option<String>>,
 }
 
@@ -270,6 +292,7 @@ pub(super) struct LabelPayload {
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct LabelPatchPayload {
     pub(super) name: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
     pub(super) color: Option<Option<String>>,
 }
 

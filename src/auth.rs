@@ -218,6 +218,7 @@ mod tests {
             id: Uuid::new_v4(),
             email: "test@example.com".into(),
             password_hash: "hash".into(),
+            display_name: None,
             email_verified_at: None,
             created_at: Utc::now(),
         };

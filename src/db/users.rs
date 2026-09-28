@@ -21,7 +21,7 @@ impl Database {
             r#"
             INSERT INTO users (id, email, password_hash, created_at)
             VALUES ($1, $2, $3, $4)
-            RETURNING id, email, password_hash, email_verified_at, created_at
+            RETURNING id, email, password_hash, display_name, email_verified_at, created_at
             "#,
         )
         .bind(user_id)
@@ -69,7 +69,7 @@ impl Database {
     pub async fn get_user_by_email(&self, email: &str) -> AppResult<Option<UserRecord>> {
         sqlx::query_as::<_, UserRecord>(
             r#"
-            SELECT id, email, password_hash, email_verified_at, created_at
+            SELECT id, email, password_hash, display_name, email_verified_at, created_at
             FROM users
             WHERE email = $1
             "#,
@@ -83,7 +83,7 @@ impl Database {
     pub async fn get_user_by_id(&self, user_id: Uuid) -> AppResult<UserRecord> {
         sqlx::query_as::<_, UserRecord>(
             r#"
-            SELECT id, email, password_hash, email_verified_at, created_at
+            SELECT id, email, password_hash, display_name, email_verified_at, created_at
             FROM users
             WHERE id = $1
             "#,
@@ -100,7 +100,7 @@ impl Database {
             UPDATE users
             SET email_verified_at = COALESCE(email_verified_at, NOW())
             WHERE id = $1
-            RETURNING id, email, password_hash, email_verified_at, created_at
+            RETURNING id, email, password_hash, display_name, email_verified_at, created_at
             "#,
         )
         .bind(user_id)
@@ -119,7 +119,7 @@ impl Database {
             UPDATE users
             SET password_hash = $2
             WHERE id = $1
-            RETURNING id, email, password_hash, email_verified_at, created_at
+            RETURNING id, email, password_hash, display_name, email_verified_at, created_at
             "#,
         )
         .bind(user_id)
@@ -135,11 +135,31 @@ impl Database {
             UPDATE users
             SET email = $2, email_verified_at = NULL
             WHERE id = $1
-            RETURNING id, email, password_hash, email_verified_at, created_at
+            RETURNING id, email, password_hash, display_name, email_verified_at, created_at
             "#,
         )
         .bind(user_id)
         .bind(email)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("user not found".into()))
+    }
+
+    pub async fn update_user_display_name(
+        &self,
+        user_id: Uuid,
+        display_name: Option<&str>,
+    ) -> AppResult<UserRecord> {
+        sqlx::query_as::<_, UserRecord>(
+            r#"
+            UPDATE users
+            SET display_name = $2
+            WHERE id = $1
+            RETURNING id, email, password_hash, display_name, email_verified_at, created_at
+            "#,
+        )
+        .bind(user_id)
+        .bind(display_name)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| AppError::NotFound("user not found".into()))

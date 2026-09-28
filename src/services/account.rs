@@ -187,6 +187,52 @@ pub async fn change_email(
     Ok(updated)
 }
 
+pub const MAX_DISPLAY_NAME_LENGTH: usize = 100;
+
+/// Updates the user's display name. `Some(name)` sets it, `None` clears it.
+pub async fn update_profile(
+    state: &AppState,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    display_name: Option<String>,
+) -> AppResult<UserRecord> {
+    let display_name = match display_name {
+        Some(name) => {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return Err(AppError::Validation(
+                    "display_name must not be blank; send null to clear it".into(),
+                ));
+            }
+            if name.chars().count() > MAX_DISPLAY_NAME_LENGTH {
+                return Err(AppError::Validation(format!(
+                    "display_name must be at most {MAX_DISPLAY_NAME_LENGTH} characters"
+                )));
+            }
+            Some(name)
+        }
+        None => None,
+    };
+
+    let updated = state
+        .db
+        .update_user_display_name(user_id, display_name.as_deref())
+        .await?;
+
+    audit::record_event(
+        state,
+        Some(tenant_id),
+        Some(user_id),
+        "user",
+        Some(user_id),
+        "account.profile_updated",
+        json!({ "display_name_set": updated.display_name.is_some() }),
+    )
+    .await;
+
+    Ok(updated)
+}
+
 async fn create_and_enqueue_token(
     state: &AppState,
     user: &UserRecord,

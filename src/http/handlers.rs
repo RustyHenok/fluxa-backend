@@ -43,8 +43,8 @@ use super::dto::{
     ProjectPatchPayload, ProjectPayload, RefreshRequest, RegisterRequest,
     ResendVerificationPayload, SessionResponse, SwitchTenantRequest, TaskAuditListResponse,
     TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse, TaskPatchPayload,
-    TaskPayload, VerifyEmailPayload, WebhookCreateResponse, WebhookDeliveryListQuery,
-    WebhookDeliveryListResponse, WebhookPatchPayload, WebhookPayload,
+    TaskPayload, UpdateProfilePayload, VerifyEmailPayload, WebhookCreateResponse,
+    WebhookDeliveryListQuery, WebhookDeliveryListResponse, WebhookPatchPayload, WebhookPayload,
 };
 use super::helpers::{
     bearer_token, ensure_active_tenant, ensure_admin_role, ensure_task_write_role, normalize_email,
@@ -303,6 +303,21 @@ pub(super) async fn me(
         user: UserResponse::from(&profile.user),
         active_tenant: TenantMembershipResponse::try_from(&profile.membership)?,
     }))
+}
+
+pub(super) async fn update_profile(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<UpdateProfilePayload>,
+) -> AppResult<Json<UserResponse>> {
+    let Some(display_name) = payload.display_name else {
+        return Err(AppError::Validation(
+            "at least one profile field must be provided".into(),
+        ));
+    };
+    let updated =
+        account_service::update_profile(&state, user.tenant_id, user.user_id, display_name).await?;
+    Ok(Json(UserResponse::from(&updated)))
 }
 
 pub(super) async fn list_my_tenants(

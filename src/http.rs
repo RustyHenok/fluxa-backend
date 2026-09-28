@@ -76,7 +76,7 @@ fn router(state: AppState) -> AppResult<Router> {
     let protected_routes = Router::new()
         .route("/auth/switch-tenant", post(handlers::switch_tenant))
         .route("/dashboard/summary", get(handlers::dashboard_summary))
-        .route("/me", get(handlers::me))
+        .route("/me", get(handlers::me).patch(handlers::update_profile))
         .route("/me/tenants", get(handlers::list_my_tenants))
         .route("/me/oauth-accounts", get(handlers::list_oauth_accounts))
         .route(

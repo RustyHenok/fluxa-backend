@@ -102,6 +102,12 @@ Both clients should use the REST API. The gRPC surface stays internal-only.
 - `POST /v1/me/change-password` with `{ "current_password": "...", "new_password": "..." }` → `204`; revokes all refresh tokens — clients should treat this as a global logout and re-authenticate
 - `POST /v1/me/change-email` with `{ "current_password": "...", "new_email": "..." }` → `200` with the updated `user`; the new address starts unverified and receives a verification email
 
+### Profile (authenticated)
+
+- every `user` payload includes `display_name` (string or null); tenant member listings include each member's `display_name`
+- `PATCH /v1/me` with `{ "display_name": "Ada Lovelace" }` → `200` with the updated `user`; 1–100 characters after trimming
+- send `{ "display_name": null }` to clear the name; omitted fields stay unchanged
+
 ### Sessions (authenticated)
 
 - `GET /v1/me/sessions` → active refresh sessions across all tenants, newest first, as `[{ "id", "tenant_id", "created_at", "expires_at" }]`
@@ -185,6 +191,7 @@ Client expectation:
 - `POST /v1/auth/password-reset/confirm`
 - `POST /v1/auth/switch-tenant`
 - `GET /v1/me`
+- `PATCH /v1/me`
 - `GET /v1/me/tenants`
 - `GET /v1/me/oauth-accounts`
 - `DELETE /v1/me/oauth-accounts/:provider`
@@ -225,7 +232,7 @@ Client expectation:
 - `POST /v1/tasks`
 - `POST /v1/tasks/bulk/status` (updates up to 100 tasks atomically; returns `{ "updated": n, "data": [...] }`)
 - `GET /v1/tasks/:task_id`
-- `PATCH /v1/tasks/:task_id`
+- `PATCH /v1/tasks/:task_id` (nullable fields `project_id`, `description`, `assignee_id`, `due_at`: send `null` to clear, omit to leave unchanged)
 - `DELETE /v1/tasks/:task_id` (soft delete: sets status to `archived`)
 - `POST /v1/tasks/:task_id/restore`
 - `GET /v1/tasks/:task_id/audit`
