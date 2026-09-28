@@ -50,6 +50,15 @@ jobs:
       - name: Run unit tests
         run: cargo test
 
+      - name: Start Postgres and Redis for integration tests
+        run: docker compose up -d postgres redis
+
+      - name: Run Docker-backed integration tests
+        env:
+          TEST_DATABASE_URL: ******127.0.0.1:5432/fluxa
+          TEST_REDIS_URL: redis://127.0.0.1:16379/
+        run: cargo test --test stack_contracts -- --ignored --nocapture
+
       - name: Start local stack
         run: docker compose up --build -d
 
@@ -65,12 +74,6 @@ jobs:
           echo "stack did not become ready; migrations may have failed" >&2
           docker compose logs --no-color api
           exit 1
-
-      - name: Run Docker-backed integration tests
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/fluxa
-          TEST_REDIS_URL: redis://127.0.0.1:16379/
-        run: cargo test --test stack_contracts -- --ignored --nocapture
 
       - name: Run end-to-end smoke test
         env:
