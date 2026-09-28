@@ -114,6 +114,14 @@ Both clients should use the REST API. The gRPC surface stays internal-only.
 - `PATCH /v1/me/notification-preferences` with any subset of those switches → `200` with the full updated object; an empty body is a `400`
 - disabled kinds are skipped at enqueue time (due/overdue reminders and comment mails); security and account mails (verification, password reset, invitations) are always sent
 
+### In-app notifications (authenticated)
+
+- `GET /v1/me/notifications` → the active tenant's task-activity feed for the current user, newest first: `{ "data": [{ "id", "kind", "payload", "read_at", "created_at" }], "next_cursor", "unread_count" }`
+- kinds are limited to `task_due_soon`, `task_overdue`, and `task_commented`; token-bearing account mails never appear in the feed
+- `?unread=true` returns only unread entries; `limit` (max 200) and the opaque `cursor` paginate
+- `POST /v1/me/notifications/:notification_id/read` → `204` (idempotent; `404` when the id is not one of the caller's feed entries)
+- `POST /v1/me/notifications/read-all` → `{ "updated": n }`
+
 ### Sessions (authenticated)
 
 - `GET /v1/me/sessions` → active refresh sessions across all tenants, newest first, as `[{ "id", "tenant_id", "created_at", "expires_at" }]`
@@ -200,6 +208,9 @@ Client expectation:
 - `PATCH /v1/me`
 - `GET /v1/me/notification-preferences`
 - `PATCH /v1/me/notification-preferences`
+- `GET /v1/me/notifications`
+- `POST /v1/me/notifications/read-all`
+- `POST /v1/me/notifications/:notification_id/read`
 - `GET /v1/me/tenants`
 - `GET /v1/me/oauth-accounts`
 - `DELETE /v1/me/oauth-accounts/:provider`

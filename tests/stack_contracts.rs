@@ -3620,3 +3620,215 @@ async fn notification_preferences_control_optional_mail_delivery() {
         "re-enabled assignee should receive comment notifications"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local Postgres and Redis services"]
+async fn notification_feed_lists_and_tracks_read_state() {
+    let _guard = stack_test_guard().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let owner = register_user(&client, &server.http_base, "feed-owner").await;
+    let member = register_user(&client, &server.http_base, "feed-member").await;
+
+    let feed_url = format!("{}/v1/me/notifications", server.http_base);
+
+    // Registration enqueues an email-verification mail, but the feed only
+    // exposes task-activity kinds, so it starts empty.
+    let empty = client
+        .get(&feed_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("feed fetch should return a response");
+    assert_eq!(empty.status(), reqwest::StatusCode::OK);
+    let empty: Value = empty.json().await.expect("feed should be json");
+    assert_eq!(empty["data"].as_array().expect("data array").len(), 0);
+    assert_eq!(empty["unread_count"], 0);
+    assert!(empty["next_cursor"].is_null());
+
+    // A member comments on the owner's assigned task twice → two feed entries.
+    add_membership(&member.user_id, &owner.tenant_id, "member").await;
+    let switched: Value = client
+        .post(format!("{}/v1/auth/switch-tenant", server.http_base))
+        .bearer_auth(&member.access_token)
+        .json(&json!({ "tenant_id": owner.tenant_id }))
+        .send()
+        .await
+        .expect("switch tenant should return a response")
+        .json()
+        .await
+        .expect("switch tenant response should be json");
+    let member_access = switched["access_token"]
+        .as_str()
+        .expect("switch should include access token")
+        .to_string();
+
+    let task = create_task(
+        &client,
+        &server.http_base,
+        &owner.access_token,
+        None,
+        "Feed target",
+        "open",
+        "medium",
+    )
+    .await;
+    let task_id = task["id"].as_str().expect("task id").to_string();
+    let assign = client
+        .patch(format!("{}/v1/tasks/{}", server.http_base, task_id))
+        .bearer_auth(&owner.access_token)
+        .json(&json!({ "assignee_id": owner.user_id }))
+        .send()
+        .await
+        .expect("assign task should return a response");
+    assert_eq!(assign.status(), reqwest::StatusCode::OK);
+
+    for body in ["first ping", "second ping"] {
+        let comment = client
+            .post(format!(
+                "{}/v1/tasks/{}/comments",
+                server.http_base, task_id
+            ))
+            .bearer_auth(&member_access)
+            .header(
+                "Idempotency-Key",
+                format!("comment-{}", uuid::Uuid::new_v4()),
+            )
+            .json(&json!({ "body": body }))
+            .send()
+            .await
+            .expect("comment create should return a response");
+        assert_eq!(comment.status(), reqwest::StatusCode::CREATED);
+    }
+
+    // Newest first, unread badge, payload carries task context.
+    let feed: Value = client
+        .get(&feed_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("feed refetch should return a response")
+        .json()
+        .await
+        .expect("feed should be json");
+    let entries = feed["data"].as_array().expect("data array");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(feed["unread_count"], 2);
+    assert_eq!(entries[0]["kind"], "task_commented");
+    assert_eq!(entries[0]["payload"]["body"], "second ping");
+    assert_eq!(entries[1]["payload"]["body"], "first ping");
+    assert!(entries[0]["read_at"].is_null());
+    let first_id = entries[0]["id"].as_str().expect("entry id").to_string();
+
+    // Keyset pagination: limit=1 yields a cursor to the older entry.
+    let page: Value = client
+        .get(format!("{feed_url}?limit=1"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("paged feed should return a response")
+        .json()
+        .await
+        .expect("paged feed should be json");
+    assert_eq!(page["data"].as_array().expect("data array").len(), 1);
+    let cursor = page["next_cursor"].as_str().expect("cursor").to_string();
+    let second_page: Value = client
+        .get(format!("{feed_url}?limit=1&cursor={cursor}"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("second page should return a response")
+        .json()
+        .await
+        .expect("second page should be json");
+    let second_entries = second_page["data"].as_array().expect("data array");
+    assert_eq!(second_entries.len(), 1);
+    assert_eq!(second_entries[0]["payload"]["body"], "first ping");
+    assert!(second_page["next_cursor"].is_null());
+
+    // The member sees nothing: the feed is scoped to the recipient.
+    let member_feed: Value = client
+        .get(&feed_url)
+        .bearer_auth(&member_access)
+        .send()
+        .await
+        .expect("member feed should return a response")
+        .json()
+        .await
+        .expect("member feed should be json");
+    assert_eq!(member_feed["data"].as_array().expect("data array").len(), 0);
+
+    // Marking a foreign id read is a 404 for the member.
+    let foreign = client
+        .post(format!("{feed_url}/{first_id}/read"))
+        .bearer_auth(&member_access)
+        .send()
+        .await
+        .expect("foreign mark-read should return a response");
+    assert_eq!(foreign.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // The owner marks one read; unread filter hides it and the badge drops.
+    let mark = client
+        .post(format!("{feed_url}/{first_id}/read"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("mark-read should return a response");
+    assert_eq!(mark.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let unread: Value = client
+        .get(format!("{feed_url}?unread=true"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("unread feed should return a response")
+        .json()
+        .await
+        .expect("unread feed should be json");
+    let unread_entries = unread["data"].as_array().expect("data array");
+    assert_eq!(unread_entries.len(), 1);
+    assert_eq!(unread["unread_count"], 1);
+    assert_eq!(unread_entries[0]["payload"]["body"], "first ping");
+
+    // read-all clears the rest and is idempotent.
+    let read_all: Value = client
+        .post(format!("{feed_url}/read-all"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("read-all should return a response")
+        .json()
+        .await
+        .expect("read-all should be json");
+    assert_eq!(read_all["updated"], 1);
+
+    let after: Value = client
+        .get(&feed_url)
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("final feed should return a response")
+        .json()
+        .await
+        .expect("final feed should be json");
+    assert_eq!(after["unread_count"], 0);
+    assert!(
+        after["data"]
+            .as_array()
+            .expect("data array")
+            .iter()
+            .all(|entry| !entry["read_at"].is_null()),
+        "all entries should carry a read timestamp"
+    );
+
+    let repeat: Value = client
+        .post(format!("{feed_url}/read-all"))
+        .bearer_auth(&owner.access_token)
+        .send()
+        .await
+        .expect("repeat read-all should return a response")
+        .json()
+        .await
+        .expect("repeat read-all should be json");
+    assert_eq!(repeat["updated"], 0);
+}

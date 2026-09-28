@@ -1,4 +1,5 @@
 use chrono::{Duration as ChronoDuration, Utc};
+use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use super::Database;
@@ -7,9 +8,10 @@ use crate::domain::{
     NotificationRecord,
 };
 use crate::error::AppResult;
+use crate::pagination::AuditCursor;
 
 const NOTIFICATION_COLUMNS: &str = "id, tenant_id, user_id, kind, recipient, payload, status, \
-     attempts, max_attempts, scheduled_at, sent_at, last_error, dedupe_key, created_at";
+     attempts, max_attempts, scheduled_at, sent_at, last_error, dedupe_key, read_at, created_at";
 
 impl Database {
     /// Inserts a notification into the outbox. Returns `false` when a
@@ -173,5 +175,151 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
         Ok(enabled.unwrap_or(true))
+    }
+
+    /// Lists the user's in-app notification feed for one tenant, restricted to
+    /// the given kinds, newest first with keyset pagination.
+    pub async fn list_notification_feed(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        kinds: &[&str],
+        unread_only: bool,
+        cursor: Option<&AuditCursor>,
+        limit: usize,
+    ) -> AppResult<(Vec<NotificationRecord>, Option<AuditCursor>)> {
+        let mut builder = QueryBuilder::<Postgres>::new(format!(
+            "SELECT {NOTIFICATION_COLUMNS} FROM notifications WHERE tenant_id = "
+        ));
+        builder.push_bind(tenant_id);
+        builder.push(" AND user_id = ");
+        builder.push_bind(user_id);
+        builder.push(" AND kind = ANY(");
+        builder.push_bind(
+            kinds
+                .iter()
+                .map(|kind| kind.to_string())
+                .collect::<Vec<_>>(),
+        );
+        builder.push(")");
+
+        if unread_only {
+            builder.push(" AND read_at IS NULL");
+        }
+
+        if let Some(cursor) = cursor {
+            builder.push(" AND (created_at < ");
+            builder.push_bind(cursor.created_at);
+            builder.push(" OR (created_at = ");
+            builder.push_bind(cursor.created_at);
+            builder.push(" AND id < ");
+            builder.push_bind(cursor.id);
+            builder.push("))");
+        }
+
+        builder.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+        builder.push_bind((limit + 1) as i64);
+
+        let mut entries = builder
+            .build_query_as::<NotificationRecord>()
+            .fetch_all(&self.pool)
+            .await?;
+
+        let next_cursor = if entries.len() > limit {
+            entries.truncate(limit);
+            entries.last().map(|entry| AuditCursor {
+                created_at: entry.created_at,
+                id: entry.id,
+            })
+        } else {
+            None
+        };
+
+        Ok((entries, next_cursor))
+    }
+
+    /// Counts the user's unread feed notifications for one tenant.
+    pub async fn count_unread_notifications(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        kinds: &[&str],
+    ) -> AppResult<i64> {
+        sqlx::query_scalar(
+            r#"
+            SELECT count(*)
+            FROM notifications
+            WHERE tenant_id = $1 AND user_id = $2 AND kind = ANY($3) AND read_at IS NULL
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(user_id)
+        .bind(
+            kinds
+                .iter()
+                .map(|kind| kind.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(crate::error::AppError::from)
+    }
+
+    /// Marks one of the user's feed notifications as read. Returns `false`
+    /// when the id does not match one of the user's feed entries.
+    pub async fn mark_notification_read(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        notification_id: Uuid,
+        kinds: &[&str],
+    ) -> AppResult<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE notifications
+            SET read_at = COALESCE(read_at, now())
+            WHERE id = $1 AND tenant_id = $2 AND user_id = $3 AND kind = ANY($4)
+            "#,
+        )
+        .bind(notification_id)
+        .bind(tenant_id)
+        .bind(user_id)
+        .bind(
+            kinds
+                .iter()
+                .map(|kind| kind.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Marks all of the user's unread feed notifications as read, returning
+    /// how many rows changed.
+    pub async fn mark_all_notifications_read(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        kinds: &[&str],
+    ) -> AppResult<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE notifications
+            SET read_at = now()
+            WHERE tenant_id = $1 AND user_id = $2 AND kind = ANY($3) AND read_at IS NULL
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(user_id)
+        .bind(
+            kinds
+                .iter()
+                .map(|kind| kind.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 }

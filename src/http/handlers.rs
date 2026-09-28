@@ -15,10 +15,11 @@ use crate::domain::{
 use crate::domain::{CommentResponse, validate_comment_body};
 use crate::domain::{
     CreateLabelInput, CreateProjectInput, CreateTaskInput, DashboardSummary, InvitationResponse,
-    JobResponse, JobResultResponse, LabelResponse, NotificationPreferencesResponse,
-    PaginatedAuditEvents, ProjectResponse, ProjectSummary, TaskAuditResponse, TaskResponse,
-    TenantMemberResponse, TenantMembershipResponse, UpdateLabelInput, UpdateProjectInput,
-    UpdateTaskInput, UserResponse, validate_role, validate_task_priority, validate_task_status,
+    JobResponse, JobResultResponse, LabelResponse, NotificationFeedResponse,
+    NotificationPreferencesResponse, PaginatedAuditEvents, ProjectResponse, ProjectSummary,
+    TaskAuditResponse, TaskResponse, TenantMemberResponse, TenantMembershipResponse,
+    UpdateLabelInput, UpdateProjectInput, UpdateTaskInput, UserResponse, validate_role,
+    validate_task_priority, validate_task_status,
 };
 use crate::domain::{WebhookDeliveryResponse, WebhookResponse};
 use crate::error::{AppError, AppResult};
@@ -26,8 +27,9 @@ use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
     account as account_service, attachments as attachment_service, audit as audit_service,
     auth as auth_service, comments as comment_service, jobs as jobs_service,
-    labels as label_service, memberships as membership_service, oauth as oauth_service,
-    projects as project_service, tasks as task_service, webhooks as webhook_service,
+    labels as label_service, memberships as membership_service,
+    notifications as notification_service, oauth as oauth_service, projects as project_service,
+    tasks as task_service, webhooks as webhook_service,
 };
 use crate::state::AppState;
 use crate::storage::ArtifactStore;
@@ -39,13 +41,13 @@ use super::dto::{
     CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest, HealthResponse,
     InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse, LabelPatchPayload,
     LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
-    NotificationPreferencesPayload, OAuthAccountResponse, OAuthLoginRequest,
-    PasswordResetConfirmPayload, PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload,
-    RefreshRequest, RegisterRequest, ResendVerificationPayload, SessionResponse,
-    SwitchTenantRequest, TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery,
-    TaskListResponse, TaskPatchPayload, TaskPayload, UpdateProfilePayload, VerifyEmailPayload,
-    WebhookCreateResponse, WebhookDeliveryListQuery, WebhookDeliveryListResponse,
-    WebhookPatchPayload, WebhookPayload,
+    NotificationListQuery, NotificationPreferencesPayload, NotificationsReadAllResponse,
+    OAuthAccountResponse, OAuthLoginRequest, PasswordResetConfirmPayload,
+    PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload, RefreshRequest,
+    RegisterRequest, ResendVerificationPayload, SessionResponse, SwitchTenantRequest,
+    TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse,
+    TaskPatchPayload, TaskPayload, UpdateProfilePayload, VerifyEmailPayload, WebhookCreateResponse,
+    WebhookDeliveryListQuery, WebhookDeliveryListResponse, WebhookPatchPayload, WebhookPayload,
 };
 use super::helpers::{
     bearer_token, ensure_active_tenant, ensure_admin_role, ensure_task_write_role, normalize_email,
@@ -344,6 +346,47 @@ pub(super) async fn update_notification_preferences(
     )
     .await?;
     Ok(Json(preferences))
+}
+
+pub(super) async fn list_my_notifications(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Query(query): Query<NotificationListQuery>,
+) -> AppResult<Json<NotificationFeedResponse>> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(AuditCursor::decode)
+        .transpose()?;
+
+    let feed = notification_service::list_feed(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        query.unread.unwrap_or(false),
+        cursor.as_ref(),
+        limit,
+    )
+    .await?;
+    Ok(Json(feed))
+}
+
+pub(super) async fn mark_notification_read(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(notification_id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    notification_service::mark_read(&state, user.tenant_id, user.user_id, notification_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn mark_all_notifications_read(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<NotificationsReadAllResponse>> {
+    let updated = notification_service::mark_all_read(&state, user.tenant_id, user.user_id).await?;
+    Ok(Json(NotificationsReadAllResponse { updated }))
 }
 
 pub(super) async fn list_my_tenants(

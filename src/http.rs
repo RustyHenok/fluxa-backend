@@ -82,6 +82,15 @@ fn router(state: AppState) -> AppResult<Router> {
             get(handlers::get_notification_preferences)
                 .patch(handlers::update_notification_preferences),
         )
+        .route("/me/notifications", get(handlers::list_my_notifications))
+        .route(
+            "/me/notifications/read-all",
+            post(handlers::mark_all_notifications_read),
+        )
+        .route(
+            "/me/notifications/:notification_id/read",
+            post(handlers::mark_notification_read),
+        )
         .route("/me/tenants", get(handlers::list_my_tenants))
         .route("/me/oauth-accounts", get(handlers::list_oauth_accounts))
         .route(

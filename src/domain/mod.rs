@@ -30,7 +30,8 @@ pub use labels::{
 pub use notifications::{
     AuditEventRecord, AuditEventResponse, NOTIFICATION_STATUS_DEAD_LETTER,
     NOTIFICATION_STATUS_PENDING, NOTIFICATION_STATUS_SENT, NewNotification,
-    NotificationPreferencesResponse, NotificationRecord, PaginatedAuditEvents,
+    NotificationFeedItemResponse, NotificationFeedResponse, NotificationPreferencesResponse,
+    NotificationRecord, PaginatedAuditEvents,
 };
 pub use projects::{
     CreateProjectInput, ProjectRecord, ProjectResponse, ProjectSummary, UpdateProjectInput,

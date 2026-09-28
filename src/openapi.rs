@@ -301,6 +301,59 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/me/notifications": {
+                "get": {
+                    "tags": ["account"],
+                    "operationId": "listMyNotifications",
+                    "summary": "List the current user's in-app notification feed",
+                    "description": "Task-activity notifications (`task_due_soon`, `task_overdue`, `task_commented`) for the active tenant, newest first. Token-bearing account mails never appear here.",
+                    "parameters": [
+                        limit_query_parameter(),
+                        cursor_query_parameter("cursor", "Opaque cursor returned by a previous notification page."),
+                        query_parameter("unread", false, "When true, only unread notifications are returned.", json!({ "type": "boolean" }))
+                    ],
+                    "responses": {
+                        "200": json_response(
+                            "Notification feed page.",
+                            schema_ref("NotificationFeedResponse")
+                        ),
+                        "400": error_response("Invalid pagination cursor."),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/notifications/read-all": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "markAllNotificationsRead",
+                    "summary": "Mark all of the current user's notifications as read",
+                    "responses": {
+                        "200": json_response(
+                            "Number of notifications marked read.",
+                            schema_ref("NotificationsReadAllResponse")
+                        ),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/notifications/{notification_id}/read": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "markNotificationRead",
+                    "summary": "Mark one notification as read",
+                    "parameters": [
+                        path_uuid_parameter("notification_id", "Notification identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Notification marked read."),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("No feed notification with this id belongs to the user."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/me/tenants": {
                 "get": {
                     "tags": ["auth"],
@@ -1911,6 +1964,36 @@ pub fn document() -> Value {
                         "task_due_soon": { "type": "boolean" },
                         "task_overdue": { "type": "boolean" },
                         "task_commented": { "type": "boolean" }
+                    }
+                },
+                "NotificationFeedItemResponse": {
+                    "type": "object",
+                    "required": ["id", "kind", "payload", "read_at", "created_at"],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "kind": json!({
+                            "type": "string",
+                            "enum": ["task_due_soon", "task_overdue", "task_commented"]
+                        }),
+                        "payload": schema_ref("FreeformObject"),
+                        "read_at": nullable(date_time_schema()),
+                        "created_at": date_time_schema()
+                    }
+                },
+                "NotificationFeedResponse": {
+                    "type": "object",
+                    "required": ["data", "next_cursor", "unread_count"],
+                    "properties": {
+                        "data": array_schema(schema_ref("NotificationFeedItemResponse")),
+                        "next_cursor": nullable(string_schema()),
+                        "unread_count": json!({ "type": "integer", "format": "int64" })
+                    }
+                },
+                "NotificationsReadAllResponse": {
+                    "type": "object",
+                    "required": ["updated"],
+                    "properties": {
+                        "updated": json!({ "type": "integer", "format": "int64" })
                     }
                 },
                 "AuditEventResponse": {

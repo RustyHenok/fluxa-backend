@@ -203,6 +203,18 @@ pub(super) struct AuditListQuery {
     pub(super) cursor: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub(super) struct NotificationListQuery {
+    pub(super) limit: Option<usize>,
+    pub(super) cursor: Option<String>,
+    pub(super) unread: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct NotificationsReadAllResponse {
+    pub(super) updated: u64,
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct AuthResponse {
     pub(super) access_token: String,

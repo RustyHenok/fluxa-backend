@@ -23,7 +23,38 @@ pub struct NotificationRecord {
     pub sent_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     pub dedupe_key: Option<String>,
+    pub read_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+}
+
+/// One entry in the authenticated user's in-app notification feed. Only
+/// task-activity kinds are exposed; token-bearing account mails never appear.
+#[derive(Debug, Clone, Serialize)]
+pub struct NotificationFeedItemResponse {
+    pub id: Uuid,
+    pub kind: String,
+    pub payload: Value,
+    pub read_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<&NotificationRecord> for NotificationFeedItemResponse {
+    fn from(record: &NotificationRecord) -> Self {
+        Self {
+            id: record.id,
+            kind: record.kind.clone(),
+            payload: record.payload.clone(),
+            read_at: record.read_at,
+            created_at: record.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NotificationFeedResponse {
+    pub data: Vec<NotificationFeedItemResponse>,
+    pub next_cursor: Option<String>,
+    pub unread_count: i64,
 }
 
 #[derive(Debug, Clone)]
