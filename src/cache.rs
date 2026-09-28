@@ -157,6 +157,16 @@ impl CacheStore {
         Ok(())
     }
 
+    /// Returns the number of jobs waiting in the Redis dispatch queue, used by
+    /// the metrics sampler.
+    pub async fn job_queue_depth(&self) -> AppResult<usize> {
+        let mut connection = self.connection().await?;
+        connection
+            .llen(&self.config.job_queue_name)
+            .await
+            .map_err(AppError::from)
+    }
+
     pub async fn dequeue_job(&self, timeout_seconds: usize) -> AppResult<Option<Uuid>> {
         let mut connection = self.connection().await?;
         let result: Option<[String; 2]> = connection
@@ -242,6 +252,22 @@ impl CacheStore {
         Ok(())
     }
 
+    pub async fn deny_access_token(&self, jti: &str, ttl: Duration) -> AppResult<()> {
+        let mut connection = self.connection().await?;
+        let key = access_token_denylist_key(jti);
+        let _: () = connection
+            .set_ex(key, "1", ttl.as_secs().max(1))
+            .await
+            .map_err(AppError::from)?;
+        Ok(())
+    }
+
+    pub async fn is_access_token_denied(&self, jti: &str) -> AppResult<bool> {
+        let mut connection = self.connection().await?;
+        let key = access_token_denylist_key(jti);
+        connection.exists(key).await.map_err(AppError::from)
+    }
+
     pub fn task_list_cache_key<T: Serialize>(
         &self,
         tenant_id: Uuid,
@@ -272,6 +298,10 @@ fn cache_key<T: Serialize>(
     })?;
     let encoded = URL_SAFE_NO_PAD.encode(payload);
     Ok(format!("{prefix}:{tenant_id}:{version}:{encoded}"))
+}
+
+fn access_token_denylist_key(jti: &str) -> String {
+    format!("auth:denylist:{jti}")
 }
 
 fn now_millis() -> u64 {

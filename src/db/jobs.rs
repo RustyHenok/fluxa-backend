@@ -5,6 +5,7 @@ use uuid::Uuid;
 use super::Database;
 use crate::domain::{
     BackgroundJobRecord, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER, JOB_TYPE_DUE_REMINDER_SWEEP,
+    JOB_TYPE_RETENTION_SWEEP,
 };
 use crate::error::{AppError, AppResult};
 
@@ -73,6 +74,37 @@ impl Database {
         .fetch_all(&self.pool)
         .await
         .map_err(AppError::from)
+    }
+
+    /// Requeues `running` jobs whose lease has expired. Jobs that already
+    /// exhausted their attempts move to `dead_letter` instead, mirroring the
+    /// semantics of `fail_job`. Returns the affected job ids and new statuses.
+    pub async fn requeue_stale_jobs(
+        &self,
+        lease: std::time::Duration,
+    ) -> AppResult<Vec<(Uuid, String)>> {
+        let lease = ChronoDuration::from_std(lease)
+            .map_err(|error| AppError::internal(format!("invalid job lease: {error}")))?;
+        let cutoff = Utc::now() - lease;
+
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(
+            r#"
+            UPDATE background_jobs
+            SET status = CASE WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'queued' END,
+                scheduled_at = now(),
+                finished_at = CASE WHEN attempts >= max_attempts THEN now() ELSE finished_at END,
+                last_error = 'job lease expired before completion'
+            WHERE status = 'running'
+              AND started_at IS NOT NULL
+              AND started_at <= $1
+            RETURNING id, status
+            "#,
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
     }
 
     pub async fn mark_job_running(&self, job_id: Uuid) -> AppResult<Option<BackgroundJobRecord>> {
@@ -182,5 +214,39 @@ impl Database {
         )
         .await
         .map(Some)
+    }
+
+    /// Enqueues a retention sweep unless one is already pending or one ran
+    /// within the configured cadence window.
+    pub async fn ensure_retention_job(
+        &self,
+        interval_hours: i64,
+        max_attempts: i32,
+    ) -> AppResult<Option<BackgroundJobRecord>> {
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM background_jobs
+            WHERE job_type = $1
+              AND (
+                    status IN ('queued', 'running')
+                    OR scheduled_at > now() - make_interval(hours => $2::int)
+                  )
+            ORDER BY scheduled_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(JOB_TYPE_RETENTION_SWEEP)
+        .bind(interval_hours)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if existing.is_some() {
+            return Ok(None);
+        }
+
+        self.create_job(None, JOB_TYPE_RETENTION_SWEEP, json!({}), max_attempts)
+            .await
+            .map(Some)
     }
 }

@@ -34,6 +34,8 @@ pub struct Cli {
     pub redis_url: String,
     #[arg(long, env = "JWT_SECRET")]
     pub jwt_secret: String,
+    #[arg(long, env = "GRPC_AUTH_TOKEN")]
+    pub grpc_auth_token: String,
     #[arg(long, env = "ACCESS_TOKEN_MINUTES", default_value_t = 15)]
     pub access_token_minutes: i64,
     #[arg(long, env = "REFRESH_TOKEN_DAYS", default_value_t = 30)]
@@ -60,6 +62,10 @@ pub struct Cli {
     pub job_queue_block_timeout_seconds: usize,
     #[arg(long, env = "MAX_JOB_ATTEMPTS", default_value_t = 5)]
     pub max_job_attempts: i32,
+    #[arg(long, env = "JOB_LEASE_SECONDS", default_value_t = 300)]
+    pub job_lease_seconds: u64,
+    #[arg(long, env = "INVITATION_TTL_HOURS", default_value_t = 72)]
+    pub invitation_ttl_hours: i64,
     #[arg(long, env = "DATABASE_MAX_CONNECTIONS", default_value_t = 10)]
     pub database_max_connections: u32,
     #[arg(long, env = "STARTUP_MAX_RETRIES", default_value_t = 20)]
@@ -68,6 +74,82 @@ pub struct Cli {
     pub startup_retry_delay_ms: u64,
     #[arg(long, env = "CORS_ALLOW_ORIGIN", default_value = "*")]
     pub cors_allow_origin: String,
+    #[arg(long, env = "MAILER_PROVIDER", default_value = "noop")]
+    pub mailer_provider: String,
+    #[arg(long, env = "SMTP_URL")]
+    pub smtp_url: Option<String>,
+    #[arg(long, env = "MAIL_FROM")]
+    pub mail_from: Option<String>,
+    #[arg(long, env = "NOTIFY_DISPATCH_INTERVAL_MS", default_value_t = 5_000)]
+    pub notify_dispatch_interval_ms: u64,
+    #[arg(long, env = "REQUIRE_EMAIL_VERIFICATION", default_value_t = false, action = clap::ArgAction::Set)]
+    pub require_email_verification: bool,
+    #[arg(long, env = "EMAIL_VERIFICATION_TTL_HOURS", default_value_t = 24)]
+    pub email_verification_ttl_hours: i64,
+    #[arg(long, env = "PASSWORD_RESET_TTL_MINUTES", default_value_t = 60)]
+    pub password_reset_ttl_minutes: i64,
+    #[arg(long, env = "REMINDER_DUE_SOON_HOURS", default_value_t = 24)]
+    pub reminder_due_soon_hours: i64,
+    #[arg(long, env = "REMINDER_DEDUPE_TTL_HOURS", default_value_t = 24)]
+    pub reminder_dedupe_ttl_hours: i64,
+    #[arg(long, env = "ARTIFACT_STORAGE_DIR", default_value = "data/exports")]
+    pub artifact_storage_dir: String,
+    #[arg(long, env = "MAX_ATTACHMENT_SIZE_BYTES", default_value_t = 5_242_880)]
+    pub max_attachment_size_bytes: usize,
+    #[arg(long, env = "WEBHOOK_DISPATCH_INTERVAL_MS", default_value_t = 5_000)]
+    pub webhook_dispatch_interval_ms: u64,
+    #[arg(long, env = "WEBHOOK_ALLOW_PRIVATE_URLS", default_value_t = false, action = clap::ArgAction::Set)]
+    pub webhook_allow_private_urls: bool,
+    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
+    pub otel_exporter_otlp_endpoint: Option<String>,
+    #[arg(long, env = "OTEL_SERVICE_NAME", default_value = "fluxa-backend")]
+    pub otel_service_name: String,
+    #[arg(long, env = "OAUTH_GOOGLE_CLIENT_ID")]
+    pub oauth_google_client_id: Option<String>,
+    #[arg(long, env = "OAUTH_GOOGLE_CLIENT_SECRET")]
+    pub oauth_google_client_secret: Option<String>,
+    #[arg(
+        long,
+        env = "OAUTH_GOOGLE_TOKEN_URL",
+        default_value = "https://oauth2.googleapis.com/token"
+    )]
+    pub oauth_google_token_url: String,
+    #[arg(
+        long,
+        env = "OAUTH_GOOGLE_USERINFO_URL",
+        default_value = "https://openidconnect.googleapis.com/v1/userinfo"
+    )]
+    pub oauth_google_userinfo_url: String,
+    #[arg(long, env = "OAUTH_GITHUB_CLIENT_ID")]
+    pub oauth_github_client_id: Option<String>,
+    #[arg(long, env = "OAUTH_GITHUB_CLIENT_SECRET")]
+    pub oauth_github_client_secret: Option<String>,
+    #[arg(
+        long,
+        env = "OAUTH_GITHUB_TOKEN_URL",
+        default_value = "https://github.com/login/oauth/access_token"
+    )]
+    pub oauth_github_token_url: String,
+    #[arg(
+        long,
+        env = "OAUTH_GITHUB_USERINFO_URL",
+        default_value = "https://api.github.com/user"
+    )]
+    pub oauth_github_userinfo_url: String,
+    #[arg(long, env = "RETENTION_SWEEP_INTERVAL_HOURS", default_value_t = 24)]
+    pub retention_sweep_interval_hours: i64,
+    #[arg(long, env = "REFRESH_TOKEN_RETENTION_DAYS", default_value_t = 30)]
+    pub refresh_token_retention_days: i64,
+    #[arg(long, env = "JOB_RETENTION_DAYS", default_value_t = 30)]
+    pub job_retention_days: i64,
+    #[arg(long, env = "NOTIFICATION_RETENTION_DAYS", default_value_t = 30)]
+    pub notification_retention_days: i64,
+    #[arg(long, env = "AUDIT_RETENTION_DAYS", default_value_t = 365)]
+    pub audit_retention_days: i64,
+    #[arg(long, env = "SAMPLER_INTERVAL_MS", default_value_t = 10_000)]
+    pub sampler_interval_ms: u64,
+    #[arg(long, env = "METRICS_AUTH_TOKEN")]
+    pub metrics_auth_token: Option<String>,
 }
 
 impl Cli {
@@ -75,6 +157,12 @@ impl Cli {
         if self.jwt_secret.len() < 32 {
             return Err(AppError::Validation(
                 "JWT_SECRET must be at least 32 characters long".into(),
+            ));
+        }
+
+        if self.grpc_auth_token.trim().len() < 32 {
+            return Err(AppError::Validation(
+                "GRPC_AUTH_TOKEN must be at least 32 characters long".into(),
             ));
         }
 
@@ -100,13 +188,140 @@ impl Cli {
             ));
         }
 
+        if self.job_lease_seconds == 0 {
+            return Err(AppError::Validation(
+                "JOB_LEASE_SECONDS must be positive".into(),
+            ));
+        }
+
+        if self.invitation_ttl_hours <= 0 {
+            return Err(AppError::Validation(
+                "INVITATION_TTL_HOURS must be positive".into(),
+            ));
+        }
+
         if self.startup_max_retries == 0 || self.startup_retry_delay_ms == 0 {
             return Err(AppError::Validation(
                 "startup retry settings must be positive".into(),
             ));
         }
 
+        match self.mailer_provider.as_str() {
+            "noop" | "log" => {}
+            "smtp" => {
+                if self
+                    .smtp_url
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err(AppError::Validation(
+                        "SMTP_URL is required when MAILER_PROVIDER is smtp".into(),
+                    ));
+                }
+                if self
+                    .mail_from
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err(AppError::Validation(
+                        "MAIL_FROM is required when MAILER_PROVIDER is smtp".into(),
+                    ));
+                }
+            }
+            other => {
+                return Err(AppError::Validation(format!(
+                    "MAILER_PROVIDER must be one of noop, log, smtp (got {other})"
+                )));
+            }
+        }
+
+        if self.notify_dispatch_interval_ms == 0 {
+            return Err(AppError::Validation(
+                "NOTIFY_DISPATCH_INTERVAL_MS must be positive".into(),
+            ));
+        }
+
+        if self.email_verification_ttl_hours <= 0 || self.password_reset_ttl_minutes <= 0 {
+            return Err(AppError::Validation(
+                "account token lifetimes must be positive".into(),
+            ));
+        }
+
+        if self.reminder_due_soon_hours <= 0 || self.reminder_dedupe_ttl_hours <= 0 {
+            return Err(AppError::Validation(
+                "reminder windows must be positive".into(),
+            ));
+        }
+
+        if self.artifact_storage_dir.trim().is_empty() {
+            return Err(AppError::Validation(
+                "ARTIFACT_STORAGE_DIR must not be empty".into(),
+            ));
+        }
+
+        if self.max_attachment_size_bytes == 0 {
+            return Err(AppError::Validation(
+                "MAX_ATTACHMENT_SIZE_BYTES must be positive".into(),
+            ));
+        }
+
+        if self.webhook_dispatch_interval_ms == 0 {
+            return Err(AppError::Validation(
+                "WEBHOOK_DISPATCH_INTERVAL_MS must be positive".into(),
+            ));
+        }
+
+        if self.retention_sweep_interval_hours <= 0
+            || self.refresh_token_retention_days <= 0
+            || self.job_retention_days <= 0
+            || self.notification_retention_days <= 0
+            || self.audit_retention_days <= 0
+        {
+            return Err(AppError::Validation(
+                "retention windows must be positive".into(),
+            ));
+        }
+
+        if self.sampler_interval_ms == 0 {
+            return Err(AppError::Validation(
+                "SAMPLER_INTERVAL_MS must be positive".into(),
+            ));
+        }
+
+        if let Some(token) = self.metrics_auth_token.as_deref()
+            && token.trim().is_empty()
+        {
+            return Err(AppError::Validation(
+                "METRICS_AUTH_TOKEN must not be empty when set".into(),
+            ));
+        }
+
+        self.warn_on_insecure_defaults();
+
         Ok(self)
+    }
+
+    /// Emits startup warnings when development-only defaults are detected so
+    /// they are not silently carried into production deployments.
+    fn warn_on_insecure_defaults(&self) {
+        const DEV_JWT_SECRET: &str = "local-development-secret-local-development";
+        const DEV_GRPC_TOKEN: &str = "local-development-grpc-token-local-development";
+
+        if self.cors_allow_origin.trim() == "*" {
+            tracing::warn!(
+                "CORS_ALLOW_ORIGIN is '*'; restrict it to explicit origins outside local development"
+            );
+        }
+        if self.jwt_secret == DEV_JWT_SECRET {
+            tracing::warn!(
+                "JWT_SECRET matches the docker-compose development default; set a unique secret outside local development"
+            );
+        }
+        if self.grpc_auth_token == DEV_GRPC_TOKEN {
+            tracing::warn!(
+                "GRPC_AUTH_TOKEN matches the docker-compose development default; set a unique token outside local development"
+            );
+        }
     }
 
     pub fn access_token_ttl(&self) -> Duration {
@@ -129,6 +344,14 @@ impl Cli {
         Duration::from_millis(self.worker_dispatch_interval_ms)
     }
 
+    pub fn job_lease(&self) -> Duration {
+        Duration::from_secs(self.job_lease_seconds)
+    }
+
+    pub fn invitation_ttl(&self) -> Duration {
+        Duration::from_secs((self.invitation_ttl_hours * 60 * 60) as u64)
+    }
+
     pub fn worker_scheduler_interval(&self) -> Duration {
         Duration::from_millis(self.worker_scheduler_interval_ms)
     }
@@ -136,6 +359,81 @@ impl Cli {
     pub fn startup_retry_delay(&self) -> Duration {
         Duration::from_millis(self.startup_retry_delay_ms)
     }
+
+    pub fn notify_dispatch_interval(&self) -> Duration {
+        Duration::from_millis(self.notify_dispatch_interval_ms)
+    }
+
+    pub fn webhook_dispatch_interval(&self) -> Duration {
+        Duration::from_millis(self.webhook_dispatch_interval_ms)
+    }
+
+    /// Returns the OTLP endpoint when configured with a non-empty value. An
+    /// empty environment variable (for example a blank compose passthrough)
+    /// disables trace export just like an unset one.
+    pub fn otlp_endpoint(&self) -> Option<&str> {
+        self.otel_exporter_otlp_endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    /// Returns the OAuth settings for a supported provider when both the
+    /// client id and secret are configured with non-empty values. Unknown
+    /// providers and unconfigured providers return `None`.
+    pub fn oauth_provider(&self, provider: &str) -> Option<OAuthProviderSettings<'_>> {
+        let (client_id, client_secret, token_url, userinfo_url) = match provider {
+            "google" => (
+                self.oauth_google_client_id.as_deref(),
+                self.oauth_google_client_secret.as_deref(),
+                self.oauth_google_token_url.as_str(),
+                self.oauth_google_userinfo_url.as_str(),
+            ),
+            "github" => (
+                self.oauth_github_client_id.as_deref(),
+                self.oauth_github_client_secret.as_deref(),
+                self.oauth_github_token_url.as_str(),
+                self.oauth_github_userinfo_url.as_str(),
+            ),
+            _ => return None,
+        };
+
+        let client_id = client_id.map(str::trim).filter(|value| !value.is_empty())?;
+        let client_secret = client_secret
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        Some(OAuthProviderSettings {
+            client_id,
+            client_secret,
+            token_url,
+            userinfo_url,
+        })
+    }
+
+    pub fn email_verification_ttl(&self) -> Duration {
+        Duration::from_secs((self.email_verification_ttl_hours * 60 * 60) as u64)
+    }
+
+    pub fn password_reset_ttl(&self) -> Duration {
+        Duration::from_secs((self.password_reset_ttl_minutes * 60) as u64)
+    }
+
+    pub fn reminder_due_soon_window(&self) -> Duration {
+        Duration::from_secs((self.reminder_due_soon_hours * 60 * 60) as u64)
+    }
+
+    pub fn sampler_interval(&self) -> Duration {
+        Duration::from_millis(self.sampler_interval_ms)
+    }
 }
 
 pub type SharedConfig = Arc<Cli>;
+
+/// Resolved OAuth client settings for a single provider.
+#[derive(Debug, Clone, Copy)]
+pub struct OAuthProviderSettings<'a> {
+    pub client_id: &'a str,
+    pub client_secret: &'a str,
+    pub token_url: &'a str,
+    pub userinfo_url: &'a str,
+}

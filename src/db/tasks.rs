@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use super::Database;
 use crate::domain::{
-    CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TaskAuditRecord,
-    TaskFilters, TaskPriority, TaskRecord, TaskStatus, UpdateTaskInput,
+    CreateTaskInput, DashboardSummary, DueReminderCandidate, PaginatedTaskAudit, PaginatedTasks,
+    TaskAuditRecord, TaskFilters, TaskPriority, TaskRecord, TaskStatus, UpdateTaskInput,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
@@ -332,7 +332,57 @@ impl Database {
         Ok(task)
     }
 
-    pub async fn delete_task(
+    pub async fn bulk_update_task_status(
+        &self,
+        tenant_id: Uuid,
+        actor_id: Uuid,
+        task_ids: &[Uuid],
+        status: TaskStatus,
+    ) -> AppResult<Vec<TaskRecord>> {
+        let now = Utc::now();
+        let mut tx = self.pool.begin().await?;
+        let tasks = sqlx::query_as::<_, TaskRecord>(
+            r#"
+            UPDATE tasks
+            SET status = $1, updated_by = $2, updated_at = $3
+            WHERE tenant_id = $4 AND id = ANY($5)
+            RETURNING id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
+                      created_by, updated_by, created_at, updated_at
+            "#,
+        )
+        .bind(status.as_str())
+        .bind(actor_id)
+        .bind(now)
+        .bind(tenant_id)
+        .bind(task_ids)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        if tasks.len() != task_ids.len() {
+            return Err(AppError::NotFound(
+                "one or more tasks were not found".into(),
+            ));
+        }
+
+        let mut audit_builder = QueryBuilder::<Postgres>::new(
+            "INSERT INTO task_audit_log (id, task_id, tenant_id, actor_user_id, event_type, payload, created_at) ",
+        );
+        audit_builder.push_values(tasks.iter(), |mut row, task| {
+            row.push_bind(Uuid::new_v4())
+                .push_bind(task.id)
+                .push_bind(tenant_id)
+                .push_bind(actor_id)
+                .push_bind("task_status_updated")
+                .push_bind(json!({ "status": status }))
+                .push_bind(now);
+        });
+        audit_builder.build().execute(&mut *tx).await?;
+
+        tx.commit().await?;
+        Ok(tasks)
+    }
+
+    pub async fn archive_task(
         &self,
         tenant_id: Uuid,
         task_id: Uuid,
@@ -341,14 +391,17 @@ impl Database {
         let mut tx = self.pool.begin().await?;
         let task = sqlx::query_as::<_, TaskRecord>(
             r#"
-            DELETE FROM tasks
-            WHERE tenant_id = $1 AND id = $2
+            UPDATE tasks
+            SET status = 'archived', updated_by = $3, updated_at = $4
+            WHERE tenant_id = $1 AND id = $2 AND status <> 'archived'
             RETURNING id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
                       created_by, updated_by, created_at, updated_at
             "#,
         )
         .bind(tenant_id)
         .bind(task_id)
+        .bind(actor_id)
+        .bind(Utc::now())
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| AppError::NotFound("task not found".into()))?;
@@ -356,7 +409,55 @@ impl Database {
         sqlx::query(
             r#"
             INSERT INTO task_audit_log (id, task_id, tenant_id, actor_user_id, event_type, payload, created_at)
-            VALUES ($1, $2, $3, $4, 'task_deleted', $5, $6)
+            VALUES ($1, $2, $3, $4, 'task_archived', $5, $6)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(task.id)
+        .bind(task.tenant_id)
+        .bind(actor_id)
+        .bind(json!({
+            "project_id": task.project_id,
+            "title": task.title,
+            "status": task.status,
+            "priority": task.priority,
+        }))
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(task)
+    }
+
+    pub async fn restore_task(
+        &self,
+        tenant_id: Uuid,
+        task_id: Uuid,
+        actor_id: Uuid,
+    ) -> AppResult<TaskRecord> {
+        let mut tx = self.pool.begin().await?;
+        let task = sqlx::query_as::<_, TaskRecord>(
+            r#"
+            UPDATE tasks
+            SET status = 'open', updated_by = $3, updated_at = $4
+            WHERE tenant_id = $1 AND id = $2 AND status = 'archived'
+            RETURNING id, tenant_id, project_id, title, description, status, priority, assignee_id, due_at,
+                      created_by, updated_by, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(task_id)
+        .bind(actor_id)
+        .bind(Utc::now())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound("archived task not found".into()))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO task_audit_log (id, task_id, tenant_id, actor_user_id, event_type, payload, created_at)
+            VALUES ($1, $2, $3, $4, 'task_restored', $5, $6)
             "#,
         )
         .bind(Uuid::new_v4())
@@ -381,6 +482,7 @@ impl Database {
         &self,
         tenant_id: Uuid,
         filters: &TaskFilters,
+        cursor: Option<&Cursor>,
         limit: usize,
     ) -> AppResult<Vec<TaskRecord>> {
         let mut builder = QueryBuilder::<Postgres>::new(
@@ -391,7 +493,7 @@ impl Database {
             WHERE tenant_id = "#,
         );
         builder.push_bind(tenant_id);
-        apply_task_filters(&mut builder, filters, None);
+        apply_task_filters(&mut builder, filters, cursor);
         builder.push(" ORDER BY updated_at DESC, id DESC LIMIT ");
         builder.push_bind(limit as i64);
 
@@ -400,6 +502,46 @@ impl Database {
             .fetch_all(&self.pool)
             .await
             .map_err(AppError::from)
+    }
+
+    /// Lists tasks with an assignee that are overdue or due within the given
+    /// window, joined with the assignee's email for notification delivery.
+    pub async fn list_due_reminder_candidates(
+        &self,
+        window_hours: i64,
+        limit: i64,
+        tenant_id: Option<Uuid>,
+    ) -> AppResult<Vec<DueReminderCandidate>> {
+        sqlx::query_as::<_, DueReminderCandidate>(
+            r#"
+            SELECT t.id AS task_id, t.tenant_id, t.title, t.due_at, t.assignee_id, u.email
+            FROM tasks t
+            JOIN users u ON u.id = t.assignee_id
+            WHERE t.due_at IS NOT NULL
+              AND t.assignee_id IS NOT NULL
+              AND t.due_at <= now() + make_interval(hours => $1::int)
+              AND t.status NOT IN ('done', 'archived')
+              AND ($3::uuid IS NULL OR t.tenant_id = $3)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM notification_preferences np
+                  WHERE np.user_id = t.assignee_id
+                    AND NOT np.enabled
+                    AND np.kind = CASE
+                        WHEN t.due_at <= now() THEN 'task_overdue'
+                        ELSE 'task_due_soon'
+                    END
+              )
+            ORDER BY t.due_at ASC
+            LIMIT $2
+            "#,
+        )
+        .bind(window_hours)
+        .bind(limit)
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::from)
     }
 
     pub async fn record_due_reminders(&self, tenant_id: Option<Uuid>) -> AppResult<usize> {
@@ -495,6 +637,14 @@ fn apply_task_filters<'a>(
         builder.push_bind(assignee_id);
     }
 
+    if let Some(label_id) = filters.label_id {
+        builder.push(
+            " AND EXISTS (SELECT 1 FROM task_labels tl WHERE tl.task_id = tasks.id AND tl.label_id = ",
+        );
+        builder.push_bind(label_id);
+        builder.push(")");
+    }
+
     if let Some(due_before) = filters.due_before {
         builder.push(" AND due_at <= ");
         builder.push_bind(due_before);
@@ -511,13 +661,24 @@ fn apply_task_filters<'a>(
     }
 
     if let Some(query) = filters.q.as_ref() {
-        let like = format!("%{}%", query.trim());
-        builder.push(" AND (title ILIKE ");
-        builder.push_bind(like.clone());
-        builder.push(" OR COALESCE(description, '') ILIKE ");
-        builder.push_bind(like);
-        builder.push(")");
+        let trimmed = query.trim();
+        if trimmed.chars().count() >= 3 {
+            builder.push(" AND search_tsv @@ websearch_to_tsquery('simple', ");
+            builder.push_bind(trimmed.to_string());
+            builder.push(")");
+        } else {
+            let like = format!("%{trimmed}%");
+            builder.push(" AND (title ILIKE ");
+            builder.push_bind(like.clone());
+            builder.push(" OR COALESCE(description, '') ILIKE ");
+            builder.push_bind(like);
+            builder.push(")");
+        }
     }
+
+    builder.push(
+        " AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = tasks.project_id AND p.archived_at IS NOT NULL)",
+    );
 
     if let Some(cursor) = cursor {
         builder.push(" AND (updated_at < ");

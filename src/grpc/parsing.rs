@@ -25,6 +25,7 @@ pub(super) fn filters_from_parts(
             .map_err(status_from_error)?,
         project_id: None,
         assignee_id,
+        label_id: None,
         due_before,
         due_after,
         updated_after,
@@ -71,6 +72,7 @@ pub(super) fn status_from_error(error: AppError) -> Status {
         AppError::Forbidden(message) => Status::permission_denied(message),
         AppError::NotFound(message) => Status::not_found(message),
         AppError::Conflict(message) => Status::already_exists(message),
+        AppError::PayloadTooLarge(message) => Status::invalid_argument(message),
         AppError::RateLimited(message) => Status::resource_exhausted(message),
         AppError::Internal(message) => Status::internal(message),
     }

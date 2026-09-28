@@ -15,6 +15,7 @@ pub const JOB_STATUS_DEAD_LETTER: &str = "dead_letter";
 
 pub const JOB_TYPE_TASK_EXPORT: &str = "task_export";
 pub const JOB_TYPE_DUE_REMINDER_SWEEP: &str = "due_reminder_sweep";
+pub const JOB_TYPE_RETENTION_SWEEP: &str = "retention_sweep";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,6 +64,7 @@ impl FromStr for JobStatus {
 pub enum JobType {
     TaskExport,
     DueReminderSweep,
+    RetentionSweep,
 }
 
 impl JobType {
@@ -70,6 +72,7 @@ impl JobType {
         match self {
             Self::TaskExport => JOB_TYPE_TASK_EXPORT,
             Self::DueReminderSweep => JOB_TYPE_DUE_REMINDER_SWEEP,
+            Self::RetentionSweep => JOB_TYPE_RETENTION_SWEEP,
         }
     }
 }
@@ -87,6 +90,7 @@ impl FromStr for JobType {
         match value {
             JOB_TYPE_TASK_EXPORT => Ok(Self::TaskExport),
             JOB_TYPE_DUE_REMINDER_SWEEP => Ok(Self::DueReminderSweep),
+            JOB_TYPE_RETENTION_SWEEP => Ok(Self::RetentionSweep),
             _ => Err(AppError::Validation(format!(
                 "unsupported job type: {value}"
             ))),
@@ -180,5 +184,53 @@ impl TryFrom<&BackgroundJobRecord> for JobResultResponse {
             finished_at: value.finished_at,
             result,
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    #[default]
+    Json,
+    Csv,
+}
+
+impl ExportFormat {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Csv => "csv",
+        }
+    }
+
+    pub const fn content_type(self) -> &'static str {
+        match self {
+            Self::Json => "application/json",
+            Self::Csv => "text/csv",
+        }
+    }
+
+    pub const fn extension(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+impl FromStr for ExportFormat {
+    type Err = AppError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "json" => Ok(Self::Json),
+            "csv" => Ok(Self::Csv),
+            _ => Err(AppError::Validation(format!(
+                "unsupported export format: {value} (expected json or csv)"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for ExportFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }

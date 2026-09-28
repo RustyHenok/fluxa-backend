@@ -36,10 +36,37 @@ pub(super) fn normalize_email(email: &str) -> AppResult<String> {
     Ok(email)
 }
 
+/// Passwords rejected regardless of length: the most common leaked passwords
+/// that satisfy the length rule.
+const COMMON_PASSWORDS: &[&str] = &[
+    "1234567890",
+    "123456789012",
+    "password123",
+    "password1234",
+    "passw0rd123",
+    "qwertyuiop",
+    "1q2w3e4r5t6y",
+    "iloveyou123",
+    "adminadmin",
+    "letmein12345",
+    "welcome12345",
+    "abc123456789",
+];
+
 pub(super) fn validate_password(password: &str) -> AppResult<()> {
-    if password.len() < 8 {
+    if password.len() < 10 {
         return Err(AppError::Validation(
-            "password must be at least 8 characters".into(),
+            "password must be at least 10 characters".into(),
+        ));
+    }
+    if password.len() > 128 {
+        return Err(AppError::Validation(
+            "password must be at most 128 characters".into(),
+        ));
+    }
+    if COMMON_PASSWORDS.contains(&password.to_ascii_lowercase().as_str()) {
+        return Err(AppError::Validation(
+            "password is too common; choose a stronger password".into(),
         ));
     }
     Ok(())
@@ -67,6 +94,16 @@ pub(super) fn ensure_admin_role(role: MembershipRole) -> AppResult<()> {
             "owner or admin role required for this action".into(),
         )),
     }
+}
+
+pub(super) fn ensure_active_tenant(
+    active_tenant_id: Uuid,
+    requested_tenant_id: Uuid,
+) -> AppResult<()> {
+    if active_tenant_id != requested_tenant_id {
+        return Err(AppError::NotFound("tenant not found".into()));
+    }
+    Ok(())
 }
 
 pub(super) fn required_idempotency_key(headers: &HeaderMap) -> AppResult<&str> {
@@ -107,10 +144,9 @@ pub(super) fn client_identifier(request: &Request) -> String {
         .headers()
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
+        && let Some(first) = value.split(',').next()
     {
-        if let Some(first) = value.split(',').next() {
-            return first.trim().to_string();
-        }
+        return first.trim().to_string();
     }
 
     request

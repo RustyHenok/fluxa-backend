@@ -154,6 +154,7 @@ mod tests {
                 database_url: "postgres://localhost/test".into(),
                 redis_url: "redis://localhost/".into(),
                 jwt_secret: "super-secret-key-super-secret-key".into(),
+                grpc_auth_token: "grpc-shared-secret-grpc-shared-secret".into(),
                 access_token_minutes: 15,
                 refresh_token_days: 30,
                 cache_ttl_seconds: 60,
@@ -167,10 +168,43 @@ mod tests {
                 worker_scheduler_interval_ms: 1000,
                 job_queue_block_timeout_seconds: 1,
                 max_job_attempts: 3,
+                job_lease_seconds: 300,
+                invitation_ttl_hours: 72,
                 database_max_connections: 1,
                 cors_allow_origin: "*".into(),
                 startup_max_retries: 3,
                 startup_retry_delay_ms: 100,
+                mailer_provider: "noop".into(),
+                smtp_url: None,
+                mail_from: None,
+                notify_dispatch_interval_ms: 1000,
+                require_email_verification: false,
+                email_verification_ttl_hours: 24,
+                password_reset_ttl_minutes: 60,
+                reminder_due_soon_hours: 24,
+                reminder_dedupe_ttl_hours: 24,
+                artifact_storage_dir: "data/exports".into(),
+                max_attachment_size_bytes: 5_242_880,
+                webhook_dispatch_interval_ms: 5_000,
+                webhook_allow_private_urls: false,
+                otel_exporter_otlp_endpoint: None,
+                otel_service_name: "fluxa-backend".into(),
+                oauth_google_client_id: None,
+                oauth_google_client_secret: None,
+                oauth_google_token_url: "https://oauth2.googleapis.com/token".into(),
+                oauth_google_userinfo_url: "https://openidconnect.googleapis.com/v1/userinfo"
+                    .into(),
+                oauth_github_client_id: None,
+                oauth_github_client_secret: None,
+                oauth_github_token_url: "https://github.com/login/oauth/access_token".into(),
+                oauth_github_userinfo_url: "https://api.github.com/user".into(),
+                retention_sweep_interval_hours: 24,
+                refresh_token_retention_days: 30,
+                job_retention_days: 30,
+                notification_retention_days: 30,
+                audit_retention_days: 365,
+                sampler_interval_ms: 10_000,
+                metrics_auth_token: None,
             }
             .validate()
             .unwrap(),
@@ -184,6 +218,8 @@ mod tests {
             id: Uuid::new_v4(),
             email: "test@example.com".into(),
             password_hash: "hash".into(),
+            display_name: None,
+            email_verified_at: None,
             created_at: Utc::now(),
         };
         let membership = MembershipRecord {
@@ -203,5 +239,51 @@ mod tests {
 
         assert_eq!(access.sub, user.id.to_string());
         assert_eq!(refresh.tenant_id, membership.tenant_id.to_string());
+    }
+
+    #[test]
+    fn otlp_endpoint_ignores_blank_values() {
+        let base = config();
+        assert_eq!(base.otlp_endpoint(), None);
+
+        let blank = Cli {
+            otel_exporter_otlp_endpoint: Some("   ".into()),
+            ..(*base).clone()
+        };
+        assert_eq!(blank.otlp_endpoint(), None);
+
+        let configured = Cli {
+            otel_exporter_otlp_endpoint: Some(" http://collector:4317 ".into()),
+            ..(*base).clone()
+        };
+        assert_eq!(configured.otlp_endpoint(), Some("http://collector:4317"));
+    }
+
+    #[test]
+    fn oauth_provider_requires_client_id_and_secret() {
+        let base = config();
+        assert!(base.oauth_provider("google").is_none());
+        assert!(base.oauth_provider("github").is_none());
+        assert!(base.oauth_provider("gitlab").is_none());
+
+        let partial = Cli {
+            oauth_google_client_id: Some("client".into()),
+            oauth_google_client_secret: Some("   ".into()),
+            ..(*base).clone()
+        };
+        assert!(partial.oauth_provider("google").is_none());
+
+        let configured = Cli {
+            oauth_google_client_id: Some(" client ".into()),
+            oauth_google_client_secret: Some("secret".into()),
+            ..(*base).clone()
+        };
+        let settings = configured
+            .oauth_provider("google")
+            .expect("google should be configured");
+        assert_eq!(settings.client_id, "client");
+        assert_eq!(settings.client_secret, "secret");
+        assert_eq!(settings.token_url, "https://oauth2.googleapis.com/token");
+        assert!(configured.oauth_provider("github").is_none());
     }
 }

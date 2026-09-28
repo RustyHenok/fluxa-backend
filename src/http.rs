@@ -2,9 +2,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::middleware as axum_middleware;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, patch, post};
 use tower_http::compression::CompressionLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::timeout::TimeoutLayer;
@@ -51,8 +52,22 @@ fn router(state: AppState) -> AppResult<Router> {
     let auth_routes = Router::new()
         .route("/auth/register", post(handlers::register))
         .route("/auth/login", post(handlers::login))
+        .route("/auth/oauth/:provider", post(handlers::oauth_login))
         .route("/auth/refresh", post(handlers::refresh))
         .route("/auth/logout", post(handlers::logout))
+        .route("/auth/verify-email", post(handlers::verify_email))
+        .route(
+            "/auth/resend-verification",
+            post(handlers::resend_verification),
+        )
+        .route(
+            "/auth/password-reset/request",
+            post(handlers::request_password_reset),
+        )
+        .route(
+            "/auth/password-reset/confirm",
+            post(handlers::confirm_password_reset),
+        )
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::auth_rate_limit_middleware,
@@ -61,11 +76,54 @@ fn router(state: AppState) -> AppResult<Router> {
     let protected_routes = Router::new()
         .route("/auth/switch-tenant", post(handlers::switch_tenant))
         .route("/dashboard/summary", get(handlers::dashboard_summary))
-        .route("/me", get(handlers::me))
+        .route("/me", get(handlers::me).patch(handlers::update_profile))
+        .route(
+            "/me/notification-preferences",
+            get(handlers::get_notification_preferences)
+                .patch(handlers::update_notification_preferences),
+        )
+        .route("/me/notifications", get(handlers::list_my_notifications))
+        .route(
+            "/me/notifications/read-all",
+            post(handlers::mark_all_notifications_read),
+        )
+        .route(
+            "/me/notifications/:notification_id/read",
+            post(handlers::mark_notification_read),
+        )
         .route("/me/tenants", get(handlers::list_my_tenants))
+        .route("/me/oauth-accounts", get(handlers::list_oauth_accounts))
+        .route(
+            "/me/oauth-accounts/:provider",
+            delete(handlers::unlink_oauth_account),
+        )
+        .route(
+            "/me/sessions",
+            get(handlers::list_sessions).delete(handlers::logout_all_sessions),
+        )
+        .route("/me/sessions/:session_id", delete(handlers::revoke_session))
+        .route("/me/change-password", post(handlers::change_password))
+        .route("/me/change-email", post(handlers::change_email))
+        .route("/audit", get(handlers::list_audit_events))
         .route(
             "/tenants/:tenant_id/members",
             get(handlers::list_tenant_members),
+        )
+        .route(
+            "/tenants/:tenant_id/members/:member_id",
+            patch(handlers::update_member_role).delete(handlers::remove_member),
+        )
+        .route(
+            "/tenants/:tenant_id/invitations",
+            get(handlers::list_invitations).post(handlers::create_invitation),
+        )
+        .route(
+            "/tenants/:tenant_id/invitations/accept",
+            post(handlers::accept_invitation),
+        )
+        .route(
+            "/tenants/:tenant_id/invitations/:invitation_id",
+            delete(handlers::revoke_invitation),
         )
         .route(
             "/projects",
@@ -78,6 +136,10 @@ fn router(state: AppState) -> AppResult<Router> {
                 .delete(handlers::delete_project),
         )
         .route(
+            "/projects/:project_id/restore",
+            post(handlers::restore_project),
+        )
+        .route(
             "/projects/:project_id/summary",
             get(handlers::get_project_summary),
         )
@@ -86,8 +148,36 @@ fn router(state: AppState) -> AppResult<Router> {
             get(handlers::list_project_tasks),
         )
         .route(
+            "/labels",
+            get(handlers::list_labels).post(handlers::create_label),
+        )
+        .route(
+            "/labels/:label_id",
+            patch(handlers::update_label).delete(handlers::delete_label),
+        )
+        .route(
+            "/webhooks",
+            get(handlers::list_webhooks).post(handlers::create_webhook),
+        )
+        .route(
+            "/webhooks/:webhook_id",
+            patch(handlers::update_webhook).delete(handlers::delete_webhook),
+        )
+        .route(
+            "/webhooks/:webhook_id/deliveries",
+            get(handlers::list_webhook_deliveries),
+        )
+        .route(
+            "/webhooks/:webhook_id/deliveries/:delivery_id/redeliver",
+            post(handlers::redeliver_webhook_delivery),
+        )
+        .route(
             "/tasks",
             get(handlers::list_tasks).post(handlers::create_task),
+        )
+        .route(
+            "/tasks/bulk/status",
+            post(handlers::bulk_update_task_status),
         )
         .route(
             "/tasks/:task_id",
@@ -95,10 +185,43 @@ fn router(state: AppState) -> AppResult<Router> {
                 .patch(handlers::update_task)
                 .delete(handlers::delete_task),
         )
+        .route("/tasks/:task_id/restore", post(handlers::restore_task))
+        .route(
+            "/tasks/:task_id/labels",
+            get(handlers::get_task_labels).put(handlers::put_task_labels),
+        )
+        .route(
+            "/tasks/:task_id/comments",
+            get(handlers::list_task_comments).post(handlers::create_task_comment),
+        )
+        .route(
+            "/tasks/:task_id/comments/:comment_id",
+            patch(handlers::update_task_comment).delete(handlers::delete_task_comment),
+        )
+        .route(
+            "/tasks/:task_id/attachments",
+            get(handlers::list_task_attachments)
+                .post(handlers::upload_task_attachment)
+                .route_layer(DefaultBodyLimit::max(
+                    state.config.max_attachment_size_bytes,
+                )),
+        )
+        .route(
+            "/tasks/:task_id/attachments/:attachment_id",
+            delete(handlers::delete_task_attachment),
+        )
+        .route(
+            "/tasks/:task_id/attachments/:attachment_id/download",
+            get(handlers::download_task_attachment),
+        )
         .route("/tasks/:task_id/audit", get(handlers::list_task_audit))
         .route("/exports/tasks", post(handlers::create_export))
         .route("/jobs/:job_id", get(handlers::get_job))
         .route("/jobs/:job_id/result", get(handlers::get_job_result))
+        .route(
+            "/jobs/:job_id/artifact",
+            get(handlers::download_job_artifact),
+        )
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::protected_middleware,
@@ -114,6 +237,12 @@ fn router(state: AppState) -> AppResult<Router> {
             "/v1",
             Router::new().merge(auth_routes).merge(protected_routes),
         )
+        .layer(axum_middleware::from_fn(
+            middleware::track_metrics_middleware,
+        ))
+        .layer(axum_middleware::from_fn(
+            middleware::propagate_trace_context,
+        ))
         .layer(TraceLayer::new_for_http())
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::with_status_code(

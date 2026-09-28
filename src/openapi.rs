@@ -21,8 +21,14 @@ pub fn document() -> Value {
             { "name": "auth", "description": "Authentication and tenant session endpoints." },
             { "name": "tenants", "description": "Tenant-scoped membership endpoints." },
             { "name": "projects", "description": "Tenant-scoped project hierarchy endpoints." },
+            { "name": "labels", "description": "Tenant-scoped label management and task label assignment." },
+            { "name": "webhooks", "description": "Tenant-scoped webhook subscriptions with HMAC-signed deliveries." },
+            { "name": "comments", "description": "Task comment threads." },
+            { "name": "attachments", "description": "Task file attachments stored via the artifact storage backend." },
             { "name": "tasks", "description": "Task CRUD, filtering, and audit endpoints." },
-            { "name": "jobs", "description": "Background job creation, status, and results." }
+            { "name": "jobs", "description": "Background job creation, status, and results." },
+            { "name": "account", "description": "Account lifecycle: email verification, password reset, credential changes." },
+            { "name": "audit", "description": "Tenant audit trail endpoints." }
         ],
         "security": [
             { "bearerAuth": [] }
@@ -94,6 +100,34 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/auth/oauth/{provider}": {
+                "post": {
+                    "tags": ["auth"],
+                    "operationId": "oauthLogin",
+                    "summary": "Authenticate with an OAuth provider",
+                    "description": "Exchanges an authorization code with the provider (`google` or `github`) and signs the user in. A first-time identity is linked to an existing account with the same verified email, or a new account and workspace are provisioned. Providers must be configured server-side via OAUTH_<PROVIDER>_CLIENT_ID/SECRET.",
+                    "security": [],
+                    "parameters": [
+                        json!({
+                            "name": "provider",
+                            "in": "path",
+                            "required": true,
+                            "description": "OAuth provider name (google or github).",
+                            "schema": { "type": "string", "enum": ["google", "github"] }
+                        })
+                    ],
+                    "requestBody": json_request_body(schema_ref("OAuthLoginRequest"), true),
+                    "responses": {
+                        "200": json_response("Login succeeded.", schema_ref("AuthResponse")),
+                        "400": error_response("Unsupported or unconfigured provider, or invalid payload."),
+                        "401": error_response("The provider rejected the authorization code or returned an unusable identity."),
+                        "403": error_response("The provider email address is not verified."),
+                        "409": error_response("The provider identity is already linked."),
+                        "429": error_response("Too many login attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/auth/refresh": {
                 "post": {
                     "tags": ["auth"],
@@ -114,7 +148,8 @@ pub fn document() -> Value {
                 "post": {
                     "tags": ["auth"],
                     "operationId": "logout",
-                    "summary": "Revoke a refresh token",
+                    "summary": "Revoke a refresh token and optionally its access token",
+                    "description": "Revokes the refresh token. If an access token is supplied in the body or via the Authorization header, its `jti` is denylisted for the remainder of its lifetime.",
                     "security": [],
                     "requestBody": json_request_body(schema_ref("LogoutRequest"), true),
                     "responses": {
@@ -122,6 +157,71 @@ pub fn document() -> Value {
                         "400": error_response("Invalid logout payload."),
                         "401": error_response("Refresh token was invalid."),
                         "429": error_response("Too many logout attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/auth/verify-email": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "verifyEmail",
+                    "summary": "Verify an email address with a single-use token",
+                    "security": [],
+                    "requestBody": json_request_body(schema_ref("VerifyEmailPayload"), true),
+                    "responses": {
+                        "204": no_content_response("Email address verified."),
+                        "400": error_response("Invalid verification payload."),
+                        "401": error_response("Token was invalid or expired."),
+                        "429": error_response("Too many attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/auth/resend-verification": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "resendVerification",
+                    "summary": "Re-send the email verification message",
+                    "description": "Always returns 202 regardless of whether the email exists, to avoid account enumeration.",
+                    "security": [],
+                    "requestBody": json_request_body(schema_ref("ResendVerificationPayload"), true),
+                    "responses": {
+                        "202": no_content_response("Verification email enqueued if the account exists."),
+                        "400": error_response("Invalid payload."),
+                        "429": error_response("Too many attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/auth/password-reset/request": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "requestPasswordReset",
+                    "summary": "Request a password reset token",
+                    "description": "Always returns 202 regardless of whether the email exists, to avoid account enumeration.",
+                    "security": [],
+                    "requestBody": json_request_body(schema_ref("PasswordResetRequestPayload"), true),
+                    "responses": {
+                        "202": no_content_response("Reset email enqueued if the account exists."),
+                        "400": error_response("Invalid payload."),
+                        "429": error_response("Too many attempts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/auth/password-reset/confirm": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "confirmPasswordReset",
+                    "summary": "Complete a password reset with a single-use token",
+                    "description": "Sets the new password and revokes every refresh token the user holds.",
+                    "security": [],
+                    "requestBody": json_request_body(schema_ref("PasswordResetConfirmPayload"), true),
+                    "responses": {
+                        "204": no_content_response("Password was reset."),
+                        "400": error_response("Invalid payload or weak password."),
+                        "401": error_response("Token was invalid or expired."),
+                        "429": error_response("Too many attempts."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -151,6 +251,107 @@ pub fn document() -> Value {
                         "401": error_response("Authentication is required."),
                         "500": error_response("Unexpected server error.")
                     }
+                },
+                "patch": {
+                    "tags": ["account"],
+                    "operationId": "updateProfile",
+                    "summary": "Update the current user's profile",
+                    "description": "Omitted fields stay unchanged; send `\"display_name\": null` to clear the name.",
+                    "requestBody": json_request_body(schema_ref("UpdateProfilePayload"), true),
+                    "responses": {
+                        "200": json_response("Updated user profile.", schema_ref("UserResponse")),
+                        "400": error_response("Invalid payload."),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/notification-preferences": {
+                "get": {
+                    "tags": ["account"],
+                    "operationId": "getNotificationPreferences",
+                    "summary": "Get the current user's notification preferences",
+                    "description": "Delivery switches for optional notification kinds. Security and account mails are always sent.",
+                    "responses": {
+                        "200": json_response(
+                            "Current notification preferences.",
+                            schema_ref("NotificationPreferencesResponse")
+                        ),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "patch": {
+                    "tags": ["account"],
+                    "operationId": "updateNotificationPreferences",
+                    "summary": "Update the current user's notification preferences",
+                    "description": "Omitted kinds stay unchanged; at least one switch must be provided.",
+                    "requestBody": json_request_body(
+                        schema_ref("NotificationPreferencesPayload"),
+                        true
+                    ),
+                    "responses": {
+                        "200": json_response(
+                            "Updated notification preferences.",
+                            schema_ref("NotificationPreferencesResponse")
+                        ),
+                        "400": error_response("Invalid payload."),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/notifications": {
+                "get": {
+                    "tags": ["account"],
+                    "operationId": "listMyNotifications",
+                    "summary": "List the current user's in-app notification feed",
+                    "description": "Task-activity notifications (`task_due_soon`, `task_overdue`, `task_commented`) for the active tenant, newest first. Token-bearing account mails never appear here.",
+                    "parameters": [
+                        limit_query_parameter(),
+                        cursor_query_parameter("cursor", "Opaque cursor returned by a previous notification page."),
+                        query_parameter("unread", false, "When true, only unread notifications are returned.", json!({ "type": "boolean" }))
+                    ],
+                    "responses": {
+                        "200": json_response(
+                            "Notification feed page.",
+                            schema_ref("NotificationFeedResponse")
+                        ),
+                        "400": error_response("Invalid pagination cursor."),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/notifications/read-all": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "markAllNotificationsRead",
+                    "summary": "Mark all of the current user's notifications as read",
+                    "responses": {
+                        "200": json_response(
+                            "Number of notifications marked read.",
+                            schema_ref("NotificationsReadAllResponse")
+                        ),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/notifications/{notification_id}/read": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "markNotificationRead",
+                    "summary": "Mark one notification as read",
+                    "parameters": [
+                        path_uuid_parameter("notification_id", "Notification identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Notification marked read."),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("No feed notification with this id belongs to the user."),
+                        "500": error_response("Unexpected server error.")
+                    }
                 }
             },
             "/v1/me/tenants": {
@@ -172,6 +373,96 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/me/oauth-accounts": {
+                "get": {
+                    "tags": ["account"],
+                    "operationId": "listOauthAccounts",
+                    "summary": "List the current user's linked OAuth accounts",
+                    "responses": {
+                        "200": {
+                            "description": "OAuth provider accounts linked to the authenticated user.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("OAuthAccountResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/oauth-accounts/{provider}": {
+                "delete": {
+                    "tags": ["account"],
+                    "operationId": "unlinkOauthAccount",
+                    "summary": "Unlink an OAuth provider from the current user",
+                    "description": "Removes the provider link. Password reset remains available, so the account stays recoverable via its verified email.",
+                    "parameters": [
+                        {
+                            "name": "provider",
+                            "in": "path",
+                            "required": true,
+                            "description": "OAuth provider name.",
+                            "schema": { "type": "string", "enum": ["google", "github"] }
+                        }
+                    ],
+                    "responses": {
+                        "204": no_content_response("Provider unlinked."),
+                        "400": error_response("Unsupported OAuth provider."),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("No account from this provider is linked."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/sessions": {
+                "get": {
+                    "tags": ["account"],
+                    "operationId": "listSessions",
+                    "summary": "List the current user's active sessions",
+                    "description": "Returns active refresh sessions across all tenants, newest first.",
+                    "responses": {
+                        "200": {
+                            "description": "Active refresh sessions for the authenticated user.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("SessionResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["account"],
+                    "operationId": "logoutAllSessions",
+                    "summary": "Log out everywhere",
+                    "description": "Revokes every refresh session for the user and the current access token. Access tokens issued to other devices stay valid until their short TTL expires.",
+                    "responses": {
+                        "204": no_content_response("All sessions revoked."),
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/sessions/{session_id}": {
+                "delete": {
+                    "tags": ["account"],
+                    "operationId": "revokeSession",
+                    "summary": "Revoke one of the current user's sessions",
+                    "parameters": [
+                        path_uuid_parameter("session_id", "Refresh session identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Session revoked."),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("No active session with this id belongs to the user."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/dashboard/summary": {
                 "get": {
                     "tags": ["tasks"],
@@ -180,6 +471,54 @@ pub fn document() -> Value {
                     "responses": {
                         "200": json_response("Tenant summary counts.", schema_ref("DashboardSummary")),
                         "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/change-password": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "changePassword",
+                    "summary": "Change the current user's password",
+                    "description": "Requires the current password. Revokes all refresh tokens; clients must log in again.",
+                    "requestBody": json_request_body(schema_ref("ChangePasswordPayload"), true),
+                    "responses": {
+                        "204": no_content_response("Password changed."),
+                        "400": error_response("Invalid payload or weak password."),
+                        "401": error_response("Current password was incorrect."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/me/change-email": {
+                "post": {
+                    "tags": ["account"],
+                    "operationId": "changeEmail",
+                    "summary": "Change the current user's email address",
+                    "description": "Requires the current password. The new address starts unverified and receives a verification email.",
+                    "requestBody": json_request_body(schema_ref("ChangeEmailPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated user profile.", schema_ref("UserResponse")),
+                        "400": error_response("Invalid payload."),
+                        "401": error_response("Current password was incorrect."),
+                        "409": error_response("Email address is already in use."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/audit": {
+                "get": {
+                    "tags": ["audit"],
+                    "operationId": "listAuditEvents",
+                    "summary": "List tenant audit events (admin only)",
+                    "parameters": [
+                        limit_query_parameter(),
+                        cursor_query_parameter("cursor", "Opaque cursor returned by a previous audit page.")
+                    ],
+                    "responses": {
+                        "200": json_response("Audit events page.", schema_ref("AuditListResponse")),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Admin or owner role is required."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -207,6 +546,131 @@ pub fn document() -> Value {
                     }
                 }
             },
+            "/v1/tenants/{tenant_id}/members/{member_id}": {
+                "patch": {
+                    "tags": ["tenants"],
+                    "operationId": "updateTenantMemberRole",
+                    "summary": "Update a member's role in the active tenant",
+                    "description": "Requires owner or admin role. Granting or revoking `owner`/`admin` roles requires the owner role. The last owner of a tenant cannot be demoted.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier."),
+                        path_uuid_parameter("member_id", "User identifier of the member.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("MemberRolePayload"), true),
+                    "responses": {
+                        "200": json_response("Member role updated.", schema_ref("TenantMemberResponse")),
+                        "400": error_response("Invalid role payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Caller role does not permit this role change."),
+                        "404": error_response("Tenant or member was not found."),
+                        "409": error_response("A tenant must retain at least one owner."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["tenants"],
+                    "operationId": "removeTenantMember",
+                    "summary": "Remove a member from the active tenant",
+                    "description": "Requires owner or admin role; removing an owner or admin requires the owner role. The last owner cannot be removed. The member's refresh tokens for this tenant are revoked.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier."),
+                        path_uuid_parameter("member_id", "User identifier of the member.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Member removed."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Caller role does not permit removing this member."),
+                        "404": error_response("Tenant or member was not found."),
+                        "409": error_response("A tenant must retain at least one owner."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tenants/{tenant_id}/invitations": {
+                "get": {
+                    "tags": ["tenants"],
+                    "operationId": "listTenantInvitations",
+                    "summary": "List pending invitations for the active tenant",
+                    "description": "Requires owner or admin role.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Pending invitations.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("InvitationResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Owner or admin role is required."),
+                        "404": error_response("Tenant was not found for the active membership."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["tenants"],
+                    "operationId": "createTenantInvitation",
+                    "summary": "Invite a user to the active tenant",
+                    "description": "Requires owner or admin role; inviting an admin requires the owner role. The response includes the single-use invitation token exactly once, and an invitation email with the token is queued for the recipient.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier."),
+                        idempotency_header_parameter()
+                    ],
+                    "requestBody": json_request_body(schema_ref("InvitationCreatePayload"), true),
+                    "responses": {
+                        "201": json_response("Invitation created.", schema_ref("InvitationCreateResponse")),
+                        "400": error_response("Invalid invitation payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Caller role does not permit this invitation."),
+                        "404": error_response("Tenant was not found for the active membership."),
+                        "409": error_response("User is already a member or already invited."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tenants/{tenant_id}/invitations/accept": {
+                "post": {
+                    "tags": ["tenants"],
+                    "operationId": "acceptTenantInvitation",
+                    "summary": "Accept an invitation to join a tenant",
+                    "description": "The invitation must target the authenticated user's email address, be unexpired, and be unused. Returns the new membership.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("InvitationAcceptPayload"), true),
+                    "responses": {
+                        "200": json_response("Invitation accepted.", schema_ref("TenantMembershipResponse")),
+                        "400": error_response("Invalid acceptance payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Invitation email does not match the authenticated user."),
+                        "404": error_response("Invitation was not found, expired, or already used."),
+                        "409": error_response("User is already a member of this tenant."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tenants/{tenant_id}/invitations/{invitation_id}": {
+                "delete": {
+                    "tags": ["tenants"],
+                    "operationId": "revokeTenantInvitation",
+                    "summary": "Revoke a pending invitation",
+                    "description": "Requires owner or admin role.",
+                    "parameters": [
+                        path_uuid_parameter("tenant_id", "Tenant identifier."),
+                        path_uuid_parameter("invitation_id", "Invitation identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Invitation revoked."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Owner or admin role is required."),
+                        "404": error_response("Tenant or pending invitation was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
             "/v1/projects": {
                 "get": {
                     "tags": ["projects"],
@@ -229,6 +693,9 @@ pub fn document() -> Value {
                     "tags": ["projects"],
                     "operationId": "createProject",
                     "summary": "Create a project",
+                    "parameters": [
+                        idempotency_header_parameter()
+                    ],
                     "requestBody": json_request_body(schema_ref("ProjectPayload"), true),
                     "responses": {
                         "201": json_response("Project created.", schema_ref("ProjectResponse")),
@@ -275,15 +742,33 @@ pub fn document() -> Value {
                 "delete": {
                     "tags": ["projects"],
                     "operationId": "deleteProject",
-                    "summary": "Delete a project",
+                    "summary": "Archive a project (soft delete)",
+                    "description": "Archives the project. Archived projects disappear from listings and their tasks are hidden until the project is restored.",
                     "parameters": [
                         path_uuid_parameter("project_id", "Project identifier.")
                     ],
                     "responses": {
-                        "204": no_content_response("Project deleted."),
+                        "204": no_content_response("Project archived."),
                         "401": error_response("Authentication is required."),
                         "403": error_response("The active role cannot delete projects."),
                         "404": error_response("Project was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/projects/{project_id}/restore": {
+                "post": {
+                    "tags": ["projects"],
+                    "operationId": "restoreProject",
+                    "summary": "Restore an archived project",
+                    "parameters": [
+                        path_uuid_parameter("project_id", "Project identifier.")
+                    ],
+                    "responses": {
+                        "200": json_response("Restored project detail.", schema_ref("ProjectResponse")),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot restore projects."),
+                        "404": error_response("No archived project with this identifier."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -316,16 +801,205 @@ pub fn document() -> Value {
                         query_parameter("status", false, "Filter by task status.", schema_ref("TaskStatus")),
                         query_parameter("priority", false, "Filter by task priority.", schema_ref("TaskPriority")),
                         query_parameter("assignee_id", false, "Filter by assignee.", uuid_schema()),
+                        query_parameter("label_id", false, "Return only tasks carrying this label.", uuid_schema()),
                         query_parameter("due_before", false, "Return tasks due before this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("due_after", false, "Return tasks due after this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("updated_after", false, "Return tasks updated after this RFC3339 timestamp.", date_time_schema()),
-                        query_parameter("q", false, "Full-text search term applied to the task title and description.", string_schema())
+                        query_parameter("q", false, "Search term applied to the task title and description. Terms of three or more characters use full-text (web search) matching on whole words; shorter terms fall back to substring matching.", string_schema())
                     ],
                     "responses": {
                         "200": json_response("Paginated project task list.", schema_ref("TaskListResponse")),
                         "400": error_response("Invalid query parameters."),
                         "401": error_response("Authentication is required."),
                         "404": error_response("Project was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/labels": {
+                "get": {
+                    "tags": ["labels"],
+                    "operationId": "listLabels",
+                    "summary": "List tenant labels",
+                    "responses": {
+                        "200": {
+                            "description": "Tenant labels ordered by name.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("LabelResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["labels"],
+                    "operationId": "createLabel",
+                    "summary": "Create a label",
+                    "parameters": [
+                        idempotency_header_parameter()
+                    ],
+                    "requestBody": json_request_body(schema_ref("LabelPayload"), true),
+                    "responses": {
+                        "201": json_response("Label created.", schema_ref("LabelResponse")),
+                        "400": error_response("Invalid label payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage labels."),
+                        "409": error_response("A label with this name already exists."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/labels/{label_id}": {
+                "patch": {
+                    "tags": ["labels"],
+                    "operationId": "updateLabel",
+                    "summary": "Rename or recolor a label",
+                    "parameters": [
+                        path_uuid_parameter("label_id", "Label identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("LabelPatchPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated label detail.", schema_ref("LabelResponse")),
+                        "400": error_response("Invalid label patch payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage labels."),
+                        "404": error_response("Label was not found."),
+                        "409": error_response("A label with this name already exists."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["labels"],
+                    "operationId": "deleteLabel",
+                    "summary": "Delete a label",
+                    "description": "Deletes the label and removes it from every task that carried it.",
+                    "parameters": [
+                        path_uuid_parameter("label_id", "Label identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Label deleted."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage labels."),
+                        "404": error_response("Label was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/webhooks": {
+                "get": {
+                    "tags": ["webhooks"],
+                    "operationId": "listWebhooks",
+                    "summary": "List tenant webhooks",
+                    "description": "Admin/owner only. Signing secrets are never returned after creation.",
+                    "responses": {
+                        "200": {
+                            "description": "Tenant webhooks ordered by newest first.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("WebhookResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["webhooks"],
+                    "operationId": "createWebhook",
+                    "summary": "Register a webhook",
+                    "description": "Admin/owner only. Registers an HTTPS/HTTP endpoint for the selected task lifecycle events. The response includes the signing secret exactly once; store it to verify the `X-Fluxa-Signature` header on deliveries. Private-network URLs are rejected unless the deployment enables `WEBHOOK_ALLOW_PRIVATE_URLS`.",
+                    "parameters": [
+                        idempotency_header_parameter()
+                    ],
+                    "requestBody": json_request_body(schema_ref("WebhookPayload"), true),
+                    "responses": {
+                        "201": json_response("Webhook created; secret shown once.", schema_ref("WebhookCreateResponse")),
+                        "400": error_response("Invalid webhook URL, unsupported event, or webhook limit reached."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "409": error_response("A request with this idempotency key is still in progress."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/webhooks/{webhook_id}": {
+                "patch": {
+                    "tags": ["webhooks"],
+                    "operationId": "updateWebhook",
+                    "summary": "Update a webhook",
+                    "description": "Admin/owner only. Updates the URL, subscribed events, or active flag.",
+                    "parameters": [
+                        path_uuid_parameter("webhook_id", "Webhook identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("WebhookPatchPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated webhook detail.", schema_ref("WebhookResponse")),
+                        "400": error_response("Invalid webhook patch payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "404": error_response("Webhook was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["webhooks"],
+                    "operationId": "deleteWebhook",
+                    "summary": "Delete a webhook",
+                    "description": "Admin/owner only. Deletes the webhook and its delivery history.",
+                    "parameters": [
+                        path_uuid_parameter("webhook_id", "Webhook identifier.")
+                    ],
+                    "responses": {
+                        "204": no_content_response("Webhook deleted."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "404": error_response("Webhook was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/webhooks/{webhook_id}/deliveries": {
+                "get": {
+                    "tags": ["webhooks"],
+                    "operationId": "listWebhookDeliveries",
+                    "summary": "List webhook deliveries",
+                    "description": "Admin/owner only. Returns delivery attempts for the webhook, newest first, with cursor pagination.",
+                    "parameters": [
+                        path_uuid_parameter("webhook_id", "Webhook identifier."),
+                        limit_query_parameter(),
+                        cursor_query_parameter("cursor", "Opaque cursor from a previous delivery page.")
+                    ],
+                    "responses": {
+                        "200": json_response("Webhook delivery page.", schema_ref("WebhookDeliveryListResponse")),
+                        "400": error_response("Invalid cursor or limit."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "404": error_response("Webhook was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver": {
+                "post": {
+                    "tags": ["webhooks"],
+                    "operationId": "redeliverWebhookDelivery",
+                    "summary": "Redeliver a webhook delivery",
+                    "description": "Admin/owner only. Requeues a delivered or dead_letter delivery with a fresh attempt budget; the worker retries it on its next dispatch cycle. Pending deliveries cannot be requeued.",
+                    "parameters": [
+                        path_uuid_parameter("webhook_id", "Webhook identifier."),
+                        path_uuid_parameter("delivery_id", "Delivery identifier.")
+                    ],
+                    "responses": {
+                        "202": json_response("Delivery requeued for dispatch.", schema_ref("WebhookDeliveryResponse")),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot manage webhooks."),
+                        "404": error_response("Webhook or delivery was not found."),
+                        "409": error_response("The delivery is already pending."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -342,10 +1016,11 @@ pub fn document() -> Value {
                         query_parameter("priority", false, "Filter by task priority.", schema_ref("TaskPriority")),
                         query_parameter("project_id", false, "Filter by project.", uuid_schema()),
                         query_parameter("assignee_id", false, "Filter by assignee.", uuid_schema()),
+                        query_parameter("label_id", false, "Return only tasks carrying this label.", uuid_schema()),
                         query_parameter("due_before", false, "Return tasks due before this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("due_after", false, "Return tasks due after this RFC3339 timestamp.", date_time_schema()),
                         query_parameter("updated_after", false, "Return tasks updated after this RFC3339 timestamp.", date_time_schema()),
-                        query_parameter("q", false, "Full-text search term applied to the task title and description.", string_schema())
+                        query_parameter("q", false, "Search term applied to the task title and description. Terms of three or more characters use full-text (web search) matching on whole words; shorter terms fall back to substring matching.", string_schema())
                     ],
                     "responses": {
                         "200": json_response("Paginated task list.", schema_ref("TaskListResponse")),
@@ -368,6 +1043,23 @@ pub fn document() -> Value {
                         "401": error_response("Authentication is required."),
                         "403": error_response("The active role cannot create tasks."),
                         "409": error_response("The idempotency key is in progress or conflicts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/bulk/status": {
+                "post": {
+                    "tags": ["tasks"],
+                    "operationId": "bulkUpdateTaskStatus",
+                    "summary": "Update the status of multiple tasks",
+                    "description": "Sets the same status on up to 100 tasks in a single all-or-nothing transaction. Duplicate ids are ignored. If any task id is unknown to the tenant, no task is updated and 404 is returned.",
+                    "requestBody": json_request_body(schema_ref("BulkTaskStatusPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated tasks in request order.", schema_ref("BulkTaskStatusResponse")),
+                        "400": error_response("Invalid payload, empty id list, or more than 100 unique ids."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot update tasks."),
+                        "404": error_response("One or more tasks were not found."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -407,15 +1099,260 @@ pub fn document() -> Value {
                 "delete": {
                     "tags": ["tasks"],
                     "operationId": "deleteTask",
-                    "summary": "Delete a task",
+                    "summary": "Archive a task (soft delete)",
+                    "description": "Sets the task status to archived. Archived tasks remain readable by id and can be restored.",
                     "parameters": [
                         path_uuid_parameter("task_id", "Task identifier.")
                     ],
                     "responses": {
-                        "204": no_content_response("Task deleted."),
+                        "204": no_content_response("Task archived."),
                         "401": error_response("Authentication is required."),
                         "403": error_response("The active role cannot delete tasks."),
                         "404": error_response("Task was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/restore": {
+                "post": {
+                    "tags": ["tasks"],
+                    "operationId": "restoreTask",
+                    "summary": "Restore an archived task",
+                    "description": "Returns an archived task to open status.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier.")
+                    ],
+                    "responses": {
+                        "200": json_response("Restored task detail.", schema_ref("TaskResponse")),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot restore tasks."),
+                        "404": error_response("No archived task with this identifier."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/labels": {
+                "get": {
+                    "tags": ["labels"],
+                    "operationId": "getTaskLabels",
+                    "summary": "List labels attached to a task",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Labels attached to the task, ordered by name.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("LabelResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Task was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "put": {
+                    "tags": ["labels"],
+                    "operationId": "setTaskLabels",
+                    "summary": "Replace the labels attached to a task",
+                    "description": "Replaces the full label set on the task with the provided label ids and returns the resulting labels.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("TaskLabelsPayload"), true),
+                    "responses": {
+                        "200": {
+                            "description": "Labels now attached to the task, ordered by name.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("LabelResponse"))
+                                }
+                            }
+                        },
+                        "400": error_response("Invalid label assignment payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot modify tasks."),
+                        "404": error_response("Task or one of the labels was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/comments": {
+                "get": {
+                    "tags": ["comments"],
+                    "operationId": "listTaskComments",
+                    "summary": "List task comments",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        limit_query_parameter(),
+                        cursor_query_parameter("cursor", "Opaque cursor from a previous task comment page.")
+                    ],
+                    "responses": {
+                        "200": json_response("Paginated task comments, newest first.", schema_ref("CommentListResponse")),
+                        "400": error_response("Invalid query parameters."),
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Task was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["comments"],
+                    "operationId": "createTaskComment",
+                    "summary": "Add a comment to a task",
+                    "description": "Adds a comment authored by the caller. When the task has an assignee other than the author, a notification is queued for the assignee.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        idempotency_header_parameter()
+                    ],
+                    "requestBody": json_request_body(schema_ref("CommentPayload"), true),
+                    "responses": {
+                        "201": json_response("Comment created.", schema_ref("CommentResponse")),
+                        "400": error_response("Invalid comment payload or missing Idempotency-Key."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot comment on tasks."),
+                        "404": error_response("Task was not found."),
+                        "409": error_response("The idempotency key is in progress or conflicts."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/comments/{comment_id}": {
+                "patch": {
+                    "tags": ["comments"],
+                    "operationId": "updateTaskComment",
+                    "summary": "Edit a task comment",
+                    "description": "Only the comment author can edit a comment.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        path_uuid_parameter("comment_id", "Comment identifier.")
+                    ],
+                    "requestBody": json_request_body(schema_ref("CommentPatchPayload"), true),
+                    "responses": {
+                        "200": json_response("Updated comment.", schema_ref("CommentResponse")),
+                        "400": error_response("Invalid comment payload."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Only the comment author can edit a comment."),
+                        "404": error_response("Task or comment was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "delete": {
+                    "tags": ["comments"],
+                    "operationId": "deleteTaskComment",
+                    "summary": "Delete a task comment",
+                    "description": "The comment author or an owner/admin can delete a comment.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        path_uuid_parameter("comment_id", "Comment identifier.")
+                    ],
+                    "responses": {
+                        "204": { "description": "Comment deleted." },
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Only the comment author or an owner/admin can delete a comment."),
+                        "404": error_response("Task or comment was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/attachments": {
+                "get": {
+                    "tags": ["attachments"],
+                    "operationId": "listTaskAttachments",
+                    "summary": "List task attachments",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Attachments on the task, newest first.",
+                            "content": {
+                                "application/json": {
+                                    "schema": array_schema(schema_ref("AttachmentResponse"))
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Task was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                },
+                "post": {
+                    "tags": ["attachments"],
+                    "operationId": "uploadTaskAttachment",
+                    "summary": "Upload a task attachment",
+                    "description": "Uploads the raw request body as an attachment. The request Content-Type header is stored as the attachment content type. A task can hold at most 20 attachments; the maximum body size is configured by MAX_ATTACHMENT_SIZE_BYTES (default 5 MiB) and larger uploads are rejected with 413.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        json!({
+                            "name": "file_name",
+                            "in": "query",
+                            "required": true,
+                            "description": "File name for the attachment (no path separators).",
+                            "schema": { "type": "string", "maxLength": 255 }
+                        }),
+                        idempotency_header_parameter()
+                    ],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/octet-stream": {
+                                "schema": { "type": "string", "format": "binary" }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "201": json_response("Attachment created.", schema_ref("AttachmentResponse")),
+                        "400": error_response("Invalid file name, empty body, attachment limit reached, or missing Idempotency-Key."),
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("The active role cannot modify tasks."),
+                        "404": error_response("Task was not found."),
+                        "409": error_response("The idempotency key is in progress or conflicts."),
+                        "413": error_response("The upload exceeds the configured size limit."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/attachments/{attachment_id}": {
+                "delete": {
+                    "tags": ["attachments"],
+                    "operationId": "deleteTaskAttachment",
+                    "summary": "Delete a task attachment",
+                    "description": "The uploader or an owner/admin can delete an attachment; the stored file is removed as well.",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        path_uuid_parameter("attachment_id", "Attachment identifier.")
+                    ],
+                    "responses": {
+                        "204": { "description": "Attachment deleted." },
+                        "401": error_response("Authentication is required."),
+                        "403": error_response("Only the uploader or an owner/admin can delete an attachment."),
+                        "404": error_response("Task or attachment was not found."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
+            },
+            "/v1/tasks/{task_id}/attachments/{attachment_id}/download": {
+                "get": {
+                    "tags": ["attachments"],
+                    "operationId": "downloadTaskAttachment",
+                    "summary": "Download a task attachment",
+                    "parameters": [
+                        path_uuid_parameter("task_id", "Task identifier."),
+                        path_uuid_parameter("attachment_id", "Attachment identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "The attachment bytes with the stored content type and a content-disposition file name.",
+                            "content": {
+                                "application/octet-stream": {
+                                    "schema": { "type": "string", "format": "binary" }
+                                }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Task or attachment was not found, or the content is no longer available."),
                         "500": error_response("Unexpected server error.")
                     }
                 }
@@ -490,6 +1427,30 @@ pub fn document() -> Value {
                         "500": error_response("Unexpected server error.")
                     }
                 }
+            },
+            "/v1/jobs/{job_id}/artifact": {
+                "get": {
+                    "tags": ["jobs"],
+                    "operationId": "downloadJobArtifact",
+                    "summary": "Download the artifact produced by a completed export job",
+                    "description": "Streams the export file (JSON or CSV) with a Content-Disposition attachment header.",
+                    "parameters": [
+                        path_uuid_parameter("job_id", "Job identifier.")
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Artifact bytes.",
+                            "content": {
+                                "application/json": { "schema": { "type": "string", "format": "binary" } },
+                                "text/csv": { "schema": { "type": "string", "format": "binary" } }
+                            }
+                        },
+                        "401": error_response("Authentication is required."),
+                        "404": error_response("Job or artifact was not found."),
+                        "409": error_response("Job result is not available yet."),
+                        "500": error_response("Unexpected server error.")
+                    }
+                }
             }
         },
         "components": {
@@ -545,10 +1506,12 @@ pub fn document() -> Value {
                 },
                 "UserResponse": {
                     "type": "object",
-                    "required": ["id", "email", "created_at"],
+                    "required": ["id", "email", "display_name", "email_verified", "created_at"],
                     "properties": {
                         "id": uuid_schema(),
                         "email": string_schema(),
+                        "display_name": nullable(string_schema()),
+                        "email_verified": { "type": "boolean" },
                         "created_at": date_time_schema()
                     }
                 },
@@ -564,12 +1527,245 @@ pub fn document() -> Value {
                 },
                 "TenantMemberResponse": {
                     "type": "object",
-                    "required": ["user_id", "email", "role", "joined_at"],
+                    "required": ["user_id", "email", "display_name", "role", "joined_at"],
                     "properties": {
                         "user_id": uuid_schema(),
                         "email": string_schema(),
+                        "display_name": nullable(string_schema()),
                         "role": schema_ref("MembershipRole"),
                         "joined_at": date_time_schema()
+                    }
+                },
+                "AttachmentResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "task_id",
+                        "uploaded_by",
+                        "file_name",
+                        "content_type",
+                        "size_bytes",
+                        "download_path",
+                        "created_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "task_id": uuid_schema(),
+                        "uploaded_by": uuid_schema(),
+                        "file_name": string_schema(),
+                        "content_type": string_schema(),
+                        "size_bytes": json!({ "type": "integer", "format": "int64" }),
+                        "download_path": json!({
+                            "type": "string",
+                            "description": "Relative API path for downloading the attachment bytes."
+                        }),
+                        "created_at": date_time_schema()
+                    }
+                },
+                "CommentPayload": {
+                    "type": "object",
+                    "required": ["body"],
+                    "properties": {
+                        "body": json!({
+                            "type": "string",
+                            "description": "Comment text, trimmed server-side; at most 4000 characters.",
+                            "maxLength": 4000
+                        })
+                    }
+                },
+                "CommentPatchPayload": {
+                    "type": "object",
+                    "required": ["body"],
+                    "properties": {
+                        "body": json!({
+                            "type": "string",
+                            "description": "Replacement comment text, trimmed server-side; at most 4000 characters.",
+                            "maxLength": 4000
+                        })
+                    }
+                },
+                "CommentResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "task_id",
+                        "author_id",
+                        "body",
+                        "created_at",
+                        "updated_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "task_id": uuid_schema(),
+                        "author_id": uuid_schema(),
+                        "body": string_schema(),
+                        "created_at": date_time_schema(),
+                        "updated_at": date_time_schema()
+                    }
+                },
+                "CommentListResponse": {
+                    "type": "object",
+                    "required": ["data", "next_cursor"],
+                    "properties": {
+                        "data": array_schema(schema_ref("CommentResponse")),
+                        "next_cursor": nullable(string_schema())
+                    }
+                },
+                "LabelPayload": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": string_schema(),
+                        "color": nullable(json!({
+                            "type": "string",
+                            "description": "Hex color like #4f46e5.",
+                            "pattern": "^#[0-9a-fA-F]{6}$"
+                        }))
+                    }
+                },
+                "LabelPatchPayload": {
+                    "type": "object",
+                    "properties": {
+                        "name": string_schema(),
+                        "color": nullable(json!({
+                            "type": "string",
+                            "description": "Hex color like #4f46e5.",
+                            "pattern": "^#[0-9a-fA-F]{6}$"
+                        }))
+                    }
+                },
+                "LabelResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "tenant_id",
+                        "name",
+                        "color",
+                        "created_by",
+                        "updated_by",
+                        "created_at",
+                        "updated_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "tenant_id": uuid_schema(),
+                        "name": string_schema(),
+                        "color": nullable(string_schema()),
+                        "created_by": uuid_schema(),
+                        "updated_by": uuid_schema(),
+                        "created_at": date_time_schema(),
+                        "updated_at": date_time_schema()
+                    }
+                },
+                "WebhookPayload": {
+                    "type": "object",
+                    "required": ["url", "events"],
+                    "properties": {
+                        "url": json!({
+                            "type": "string",
+                            "description": "HTTP or HTTPS endpoint that receives deliveries. Private-network hosts are rejected unless the deployment allows them."
+                        }),
+                        "events": json!({
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "string",
+                                "enum": ["task_created", "task_updated", "task_status_updated", "task_archived", "task_restored"]
+                            },
+                            "description": "Task lifecycle events to subscribe to."
+                        })
+                    }
+                },
+                "WebhookPatchPayload": {
+                    "type": "object",
+                    "properties": {
+                        "url": string_schema(),
+                        "events": json!({
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "string",
+                                "enum": ["task_created", "task_updated", "task_status_updated", "task_archived", "task_restored"]
+                            }
+                        }),
+                        "is_active": json!({ "type": "boolean" })
+                    }
+                },
+                "WebhookResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "tenant_id",
+                        "url",
+                        "events",
+                        "is_active",
+                        "created_by",
+                        "created_at",
+                        "updated_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "tenant_id": uuid_schema(),
+                        "url": string_schema(),
+                        "events": array_schema(string_schema()),
+                        "is_active": json!({ "type": "boolean" }),
+                        "created_by": uuid_schema(),
+                        "created_at": date_time_schema(),
+                        "updated_at": date_time_schema()
+                    }
+                },
+                "WebhookCreateResponse": {
+                    "type": "object",
+                    "required": ["webhook", "secret"],
+                    "properties": {
+                        "webhook": schema_ref("WebhookResponse"),
+                        "secret": json!({
+                            "type": "string",
+                            "description": "HMAC-SHA256 signing secret. Returned only at creation time."
+                        })
+                    }
+                },
+                "WebhookDeliveryResponse": {
+                    "type": "object",
+                    "required": [
+                        "id",
+                        "webhook_id",
+                        "event_type",
+                        "payload",
+                        "status",
+                        "attempts",
+                        "delivered_at",
+                        "last_error",
+                        "created_at"
+                    ],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "webhook_id": uuid_schema(),
+                        "event_type": string_schema(),
+                        "payload": json!({ "description": "Event payload delivered to the endpoint." }),
+                        "status": json!({
+                            "type": "string",
+                            "enum": ["pending", "delivered", "dead_letter"]
+                        }),
+                        "attempts": json!({ "type": "integer" }),
+                        "delivered_at": nullable(date_time_schema()),
+                        "last_error": nullable(string_schema()),
+                        "created_at": date_time_schema()
+                    }
+                },
+                "WebhookDeliveryListResponse": {
+                    "type": "object",
+                    "required": ["data", "next_cursor"],
+                    "properties": {
+                        "data": array_schema(schema_ref("WebhookDeliveryResponse")),
+                        "next_cursor": nullable(string_schema())
+                    }
+                },
+                "TaskLabelsPayload": {
+                    "type": "object",
+                    "required": ["label_ids"],
+                    "properties": {
+                        "label_ids": array_schema(uuid_schema())
                     }
                 },
                 "ProjectPayload": {
@@ -649,6 +1845,34 @@ pub fn document() -> Value {
                         "tenant_id": nullable(uuid_schema())
                     }
                 },
+                "OAuthLoginRequest": {
+                    "type": "object",
+                    "required": ["code", "redirect_uri"],
+                    "properties": {
+                        "code": string_schema(),
+                        "redirect_uri": string_schema(),
+                        "tenant_id": nullable(uuid_schema()),
+                        "tenant_name": nullable(string_schema())
+                    }
+                },
+                "OAuthAccountResponse": {
+                    "type": "object",
+                    "required": ["provider", "linked_at"],
+                    "properties": {
+                        "provider": { "type": "string", "enum": ["google", "github"] },
+                        "linked_at": date_time_schema()
+                    }
+                },
+                "SessionResponse": {
+                    "type": "object",
+                    "required": ["id", "tenant_id", "created_at", "expires_at"],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "tenant_id": uuid_schema(),
+                        "created_at": date_time_schema(),
+                        "expires_at": date_time_schema()
+                    }
+                },
                 "RefreshRequest": {
                     "type": "object",
                     "required": ["refresh_token"],
@@ -661,7 +1885,185 @@ pub fn document() -> Value {
                     "type": "object",
                     "required": ["refresh_token"],
                     "properties": {
-                        "refresh_token": string_schema()
+                        "refresh_token": string_schema(),
+                        "access_token": {
+                            "type": "string",
+                            "description": "Optional access token to revoke alongside the refresh token. When omitted, the Authorization bearer token is used if present."
+                        }
+                    }
+                },
+                "VerifyEmailPayload": {
+                    "type": "object",
+                    "required": ["token"],
+                    "properties": {
+                        "token": string_schema()
+                    }
+                },
+                "ResendVerificationPayload": {
+                    "type": "object",
+                    "required": ["email"],
+                    "properties": {
+                        "email": string_schema()
+                    }
+                },
+                "PasswordResetRequestPayload": {
+                    "type": "object",
+                    "required": ["email"],
+                    "properties": {
+                        "email": string_schema()
+                    }
+                },
+                "PasswordResetConfirmPayload": {
+                    "type": "object",
+                    "required": ["token", "new_password"],
+                    "properties": {
+                        "token": string_schema(),
+                        "new_password": string_schema()
+                    }
+                },
+                "ChangePasswordPayload": {
+                    "type": "object",
+                    "required": ["current_password", "new_password"],
+                    "properties": {
+                        "current_password": string_schema(),
+                        "new_password": string_schema()
+                    }
+                },
+                "ChangeEmailPayload": {
+                    "type": "object",
+                    "required": ["current_password", "new_email"],
+                    "properties": {
+                        "current_password": string_schema(),
+                        "new_email": string_schema()
+                    }
+                },
+                "UpdateProfilePayload": {
+                    "type": "object",
+                    "properties": {
+                        "display_name": {
+                            "type": "string",
+                            "nullable": true,
+                            "maxLength": 100,
+                            "description": "Display name shown to other members. Send null to clear."
+                        }
+                    }
+                },
+                "NotificationPreferencesResponse": {
+                    "type": "object",
+                    "required": ["task_due_soon", "task_overdue", "task_commented"],
+                    "properties": {
+                        "task_due_soon": { "type": "boolean" },
+                        "task_overdue": { "type": "boolean" },
+                        "task_commented": { "type": "boolean" }
+                    }
+                },
+                "NotificationPreferencesPayload": {
+                    "type": "object",
+                    "description": "Delivery switches; omitted kinds stay unchanged. At least one must be provided.",
+                    "properties": {
+                        "task_due_soon": { "type": "boolean" },
+                        "task_overdue": { "type": "boolean" },
+                        "task_commented": { "type": "boolean" }
+                    }
+                },
+                "NotificationFeedItemResponse": {
+                    "type": "object",
+                    "required": ["id", "kind", "payload", "read_at", "created_at"],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "kind": json!({
+                            "type": "string",
+                            "enum": ["task_due_soon", "task_overdue", "task_commented"]
+                        }),
+                        "payload": schema_ref("FreeformObject"),
+                        "read_at": nullable(date_time_schema()),
+                        "created_at": date_time_schema()
+                    }
+                },
+                "NotificationFeedResponse": {
+                    "type": "object",
+                    "required": ["data", "next_cursor", "unread_count"],
+                    "properties": {
+                        "data": array_schema(schema_ref("NotificationFeedItemResponse")),
+                        "next_cursor": nullable(string_schema()),
+                        "unread_count": json!({ "type": "integer", "format": "int64" })
+                    }
+                },
+                "NotificationsReadAllResponse": {
+                    "type": "object",
+                    "required": ["updated"],
+                    "properties": {
+                        "updated": json!({ "type": "integer", "format": "int64" })
+                    }
+                },
+                "AuditEventResponse": {
+                    "type": "object",
+                    "required": ["id", "actor_user_id", "subject_type", "subject_id", "event_type", "payload", "created_at"],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "actor_user_id": nullable(uuid_schema()),
+                        "subject_type": string_schema(),
+                        "subject_id": nullable(uuid_schema()),
+                        "event_type": string_schema(),
+                        "payload": schema_ref("FreeformObject"),
+                        "created_at": date_time_schema()
+                    }
+                },
+                "AuditListResponse": {
+                    "type": "object",
+                    "required": ["data", "next_cursor"],
+                    "properties": {
+                        "data": array_schema(schema_ref("AuditEventResponse")),
+                        "next_cursor": nullable(string_schema())
+                    }
+                },
+                "InvitationCreatePayload": {
+                    "type": "object",
+                    "required": ["email", "role"],
+                    "properties": {
+                        "email": string_schema(),
+                        "role": {
+                            "type": "string",
+                            "enum": ["admin", "member"],
+                            "description": "Role granted on acceptance. Owners cannot be invited."
+                        }
+                    }
+                },
+                "InvitationAcceptPayload": {
+                    "type": "object",
+                    "required": ["token"],
+                    "properties": {
+                        "token": string_schema()
+                    }
+                },
+                "MemberRolePayload": {
+                    "type": "object",
+                    "required": ["role"],
+                    "properties": {
+                        "role": schema_ref("MembershipRole")
+                    }
+                },
+                "InvitationResponse": {
+                    "type": "object",
+                    "required": ["id", "tenant_id", "email", "role", "expires_at", "created_at"],
+                    "properties": {
+                        "id": uuid_schema(),
+                        "tenant_id": uuid_schema(),
+                        "email": string_schema(),
+                        "role": schema_ref("MembershipRole"),
+                        "expires_at": date_time_schema(),
+                        "created_at": date_time_schema()
+                    }
+                },
+                "InvitationCreateResponse": {
+                    "type": "object",
+                    "required": ["invitation", "token"],
+                    "properties": {
+                        "invitation": schema_ref("InvitationResponse"),
+                        "token": {
+                            "type": "string",
+                            "description": "Single-use invitation token, returned exactly once. The same token is emailed to the invited address."
+                        }
                     }
                 },
                 "SwitchTenantRequest": {
@@ -736,6 +2138,28 @@ pub fn document() -> Value {
                         "priority": schema_ref("TaskPriority"),
                         "assignee_id": nullable(uuid_schema()),
                         "due_at": nullable(date_time_schema())
+                    }
+                },
+                "BulkTaskStatusPayload": {
+                    "type": "object",
+                    "required": ["task_ids", "status"],
+                    "properties": {
+                        "task_ids": {
+                            "type": "array",
+                            "items": uuid_schema(),
+                            "minItems": 1,
+                            "maxItems": 100,
+                            "description": "Task ids to update. Duplicates are ignored; at most 100 unique ids per request."
+                        },
+                        "status": schema_ref("TaskStatus")
+                    }
+                },
+                "BulkTaskStatusResponse": {
+                    "type": "object",
+                    "required": ["updated", "data"],
+                    "properties": {
+                        "updated": { "type": "integer", "minimum": 0, "description": "Number of tasks updated." },
+                        "data": array_schema(schema_ref("TaskResponse"))
                     }
                 },
                 "TaskResponse": {
@@ -815,10 +2239,12 @@ pub fn document() -> Value {
                         "priority": schema_ref("TaskPriority"),
                         "project_id": uuid_schema(),
                         "assignee_id": uuid_schema(),
+                        "label_id": uuid_schema(),
                         "due_before": date_time_schema(),
                         "due_after": date_time_schema(),
                         "updated_after": date_time_schema(),
-                        "q": string_schema()
+                        "q": string_schema(),
+                        "format": schema_ref("ExportFormat")
                     }
                 },
                 "TaskFilters": {
@@ -828,6 +2254,7 @@ pub fn document() -> Value {
                         "priority": schema_ref("TaskPriority"),
                         "project_id": uuid_schema(),
                         "assignee_id": uuid_schema(),
+                        "label_id": uuid_schema(),
                         "due_before": date_time_schema(),
                         "due_after": date_time_schema(),
                         "updated_after": date_time_schema(),
@@ -840,7 +2267,23 @@ pub fn document() -> Value {
                     "properties": {
                         "tenant_id": uuid_schema(),
                         "requested_by": uuid_schema(),
-                        "filters": schema_ref("TaskFilters")
+                        "filters": schema_ref("TaskFilters"),
+                        "format": schema_ref("ExportFormat")
+                    }
+                },
+                "ExportFormat": {
+                    "type": "string",
+                    "enum": ["json", "csv"],
+                    "default": "json"
+                },
+                "ExportArtifact": {
+                    "type": "object",
+                    "required": ["key", "content_type", "size_bytes", "download_path"],
+                    "properties": {
+                        "key": string_schema(),
+                        "content_type": string_schema(),
+                        "size_bytes": { "type": "integer", "format": "int64" },
+                        "download_path": string_schema()
                     }
                 },
                 "DueReminderSweepJobPayload": {
@@ -852,21 +2295,23 @@ pub fn document() -> Value {
                 },
                 "TaskExportJobResult": {
                     "type": "object",
-                    "required": ["requested_by", "generated_at", "task_count", "tasks"],
+                    "required": ["requested_by", "generated_at", "task_count", "format", "artifact"],
                     "properties": {
                         "requested_by": uuid_schema(),
                         "generated_at": date_time_schema(),
                         "task_count": int64_schema(),
-                        "tasks": array_schema(schema_ref("TaskResponse"))
+                        "format": schema_ref("ExportFormat"),
+                        "artifact": schema_ref("ExportArtifact")
                     }
                 },
                 "DueReminderSweepJobResult": {
                     "type": "object",
-                    "required": ["generated_at", "tenant_id", "reminder_count"],
+                    "required": ["generated_at", "tenant_id", "reminder_count", "notification_count"],
                     "properties": {
                         "generated_at": date_time_schema(),
                         "tenant_id": nullable(uuid_schema()),
-                        "reminder_count": int64_schema()
+                        "reminder_count": int64_schema(),
+                        "notification_count": int64_schema()
                     }
                 },
                 "JobResponse": {

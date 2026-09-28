@@ -95,12 +95,22 @@ TENANTS_JSON="$(curl -sS "$BASE/v1/me/tenants" -H "Authorization: Bearer $ACCESS
 [[ "$(jq -r '.[0].tenant_id' <<<"$TENANTS_JSON")" == "$TENANT_ID" ]] || fail "/v1/me/tenants returned unexpected tenant"
 
 step "Create project"
+PROJECT_KEY="smoke-project-$(date +%s)-$RANDOM"
 PROJECT_JSON="$(
   curl -sS -X POST "$BASE/v1/projects" \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: $PROJECT_KEY" \
     -H 'content-type: application/json' \
     -d '{"name":"Smoke Project","description":"verify project hierarchy"}'
 )"
+PROJECT_REPLAY_JSON="$(
+  curl -sS -X POST "$BASE/v1/projects" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: $PROJECT_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"name":"Smoke Project","description":"verify project hierarchy"}'
+)"
+[[ "$(jq -er '.id' <<<"$PROJECT_REPLAY_JSON")" == "$(jq -er '.id' <<<"$PROJECT_JSON")" ]] || fail "project creation replay returned a different project"
 PROJECT_ID="$(jq -er '.id' <<<"$PROJECT_JSON")"
 
 PROJECT_FETCH_JSON="$(curl -sS "$BASE/v1/projects/$PROJECT_ID" -H "Authorization: Bearer $ACCESS_TOKEN")"
@@ -163,10 +173,82 @@ PROJECT_SUMMARY_PATCHED_JSON="$(curl -sS "$BASE/v1/projects/$PROJECT_ID/summary"
 [[ "$(jq -r '.overdue_task_count' <<<"$PROJECT_SUMMARY_PATCHED_JSON")" == "0" ]] || fail "project summary returned unexpected overdue count after patch"
 [[ "$(jq -r '.recent_activity_count' <<<"$PROJECT_SUMMARY_PATCHED_JSON")" == "2" ]] || fail "project summary returned unexpected recent activity count after patch"
 
+step "Create label, assign to task, and filter by label"
+LABEL_KEY="label-create-$(date +%s)-$RANDOM"
+LABEL_JSON="$(
+  curl -sS -X POST "$BASE/v1/labels" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -H "Idempotency-Key: $LABEL_KEY" \
+    -d '{"name":"Smoke label","color":"#FF8800"}'
+)"
+LABEL_ID="$(jq -er '.id' <<<"$LABEL_JSON")"
+[[ "$(jq -r '.color' <<<"$LABEL_JSON")" == "#ff8800" ]] || fail "label color was not normalized to lowercase"
+
+ASSIGN_JSON="$(
+  curl -sS -X PUT "$BASE/v1/tasks/$TASK_ID/labels" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"label_ids\":[\"$LABEL_ID\"]}"
+)"
+[[ "$(jq -r '.[0].name' <<<"$ASSIGN_JSON")" == "Smoke label" ]] || fail "label assignment did not return the label"
+
+LABEL_FILTER_JSON="$(curl -sS "$BASE/v1/tasks?label_id=$LABEL_ID" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.data[0].id' <<<"$LABEL_FILTER_JSON")" == "$TASK_ID" ]] || fail "label filter did not return the tagged task"
+
+TASK_LABELS_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/labels" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r 'length' <<<"$TASK_LABELS_JSON")" == "1" ]] || fail "task labels endpoint should list exactly one label"
+
+step "Create, list, and edit a task comment"
+COMMENT_KEY="comment-create-$(date +%s)-$RANDOM"
+COMMENT_JSON="$(
+  curl -sS -X POST "$BASE/v1/tasks/$TASK_ID/comments" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -H "Idempotency-Key: $COMMENT_KEY" \
+    -d '{"body":"  Smoke comment  "}'
+)"
+COMMENT_ID="$(jq -er '.id' <<<"$COMMENT_JSON")"
+[[ "$(jq -r '.body' <<<"$COMMENT_JSON")" == "Smoke comment" ]] || fail "comment body was not trimmed"
+
+COMMENT_LIST_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/comments" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.data | length' <<<"$COMMENT_LIST_JSON")" == "1" ]] || fail "comment list should contain exactly one comment"
+[[ "$(jq -r '.data[0].id' <<<"$COMMENT_LIST_JSON")" == "$COMMENT_ID" ]] || fail "comment list did not return the created comment"
+
+COMMENT_PATCH_JSON="$(
+  curl -sS -X PATCH "$BASE/v1/tasks/$TASK_ID/comments/$COMMENT_ID" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d '{"body":"Smoke comment (edited)"}'
+)"
+[[ "$(jq -r '.body' <<<"$COMMENT_PATCH_JSON")" == "Smoke comment (edited)" ]] || fail "comment edit did not update the body"
+
+step "Upload, list, and download a task attachment"
+ATTACHMENT_KEY="attachment-create-$(date +%s)-$RANDOM"
+ATTACHMENT_FILE="$(mktemp)"
+printf 'smoke attachment payload' > "$ATTACHMENT_FILE"
+ATTACHMENT_JSON="$(
+  curl -sS -X POST "$BASE/v1/tasks/$TASK_ID/attachments?file_name=smoke.txt" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: $ATTACHMENT_KEY" \
+    -H 'content-type: text/plain' \
+    --data-binary @"$ATTACHMENT_FILE"
+)"
+ATTACHMENT_ID="$(jq -er '.id' <<<"$ATTACHMENT_JSON")" || fail "attachment upload did not return an id"
+[[ "$(jq -r '.file_name' <<<"$ATTACHMENT_JSON")" == "smoke.txt" ]] || fail "attachment upload returned unexpected file name"
+ATTACHMENT_LIST_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/attachments" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r 'length' <<<"$ATTACHMENT_LIST_JSON")" == "1" ]] || fail "attachment list should contain exactly one attachment"
+ATTACHMENT_DOWNLOAD="$(curl -sS "$BASE/v1/tasks/$TASK_ID/attachments/$ATTACHMENT_ID/download" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$ATTACHMENT_DOWNLOAD" == "smoke attachment payload" ]] || fail "attachment download did not round-trip the content"
+rm -f "$ATTACHMENT_FILE"
+
 step "Verify task audit feed"
 AUDIT_JSON="$(curl -sS "$BASE/v1/tasks/$TASK_ID/audit?limit=10" -H "Authorization: Bearer $ACCESS_TOKEN")"
-[[ "$(jq -r '.data[0].event_type' <<<"$AUDIT_JSON")" == "task_updated" ]] || fail "task audit did not return the most recent update event first"
-[[ "$(jq -r '.data[1].event_type' <<<"$AUDIT_JSON")" == "task_created" ]] || fail "task audit did not include the create event"
+[[ "$(jq -r '.data[0].event_type' <<<"$AUDIT_JSON")" == "task_attachment_added" ]] || fail "task audit did not return the attachment event first"
+jq -e '[.data[].event_type] | index("task_comment_added")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the comment event"
+jq -e '[.data[].event_type] | index("task_labels_updated")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the label assignment event"
+jq -e '[.data[].event_type] | index("task_updated")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the update event"
+jq -e '[.data[].event_type] | index("task_created")' <<<"$AUDIT_JSON" >/dev/null || fail "task audit did not include the create event"
 
 step "Verify dashboard summary"
 SUMMARY_JSON="$(curl -sS "$BASE/v1/dashboard/summary" -H "Authorization: Bearer $ACCESS_TOKEN")"
@@ -174,7 +256,7 @@ SUMMARY_JSON="$(curl -sS "$BASE/v1/dashboard/summary" -H "Authorization: Bearer 
 [[ "$(jq -r '.in_progress_task_count' <<<"$SUMMARY_JSON")" == "1" ]] || fail "dashboard summary returned unexpected in-progress task count"
 [[ "$(jq -r '.done_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected done task count"
 [[ "$(jq -r '.overdue_task_count' <<<"$SUMMARY_JSON")" == "0" ]] || fail "dashboard summary returned unexpected overdue task count"
-[[ "$(jq -r '.recent_activity_count' <<<"$SUMMARY_JSON")" == "2" ]] || fail "dashboard summary returned unexpected recent activity count"
+[[ "$(jq -r '.recent_activity_count' <<<"$SUMMARY_JSON")" == "5" ]] || fail "dashboard summary returned unexpected recent activity count"
 
 step "Create export job and wait for completion"
 EXPORT_KEY="task-export-$(date +%s)-$RANDOM"
@@ -204,8 +286,118 @@ JOB_RESULT_JSON="$(curl -sS "$BASE/v1/jobs/$JOB_ID/result" -H "Authorization: Be
 [[ "$(jq -r '.job_id' <<<"$JOB_RESULT_JSON")" == "$JOB_ID" ]] || fail "job result endpoint returned an unexpected job id"
 [[ "$(jq -r '.job_type' <<<"$JOB_RESULT_JSON")" == "task_export" ]] || fail "job result endpoint returned an unexpected job type"
 [[ "$(jq -r '.result.task_count' <<<"$JOB_RESULT_JSON")" == "1" ]] || fail "job result endpoint returned an unexpected task count"
-[[ "$(jq -r '.result.tasks[0].id' <<<"$JOB_RESULT_JSON")" == "$TASK_ID" ]] || fail "job result endpoint did not include the expected task"
-[[ "$(jq -r '.result.tasks[0].project_id' <<<"$JOB_RESULT_JSON")" == "$PROJECT_ID" ]] || fail "job result endpoint did not include the expected project linkage"
+[[ "$(jq -r '.result.format' <<<"$JOB_RESULT_JSON")" == "json" ]] || fail "job result endpoint returned an unexpected export format"
+ARTIFACT_PATH="$(jq -er '.result.artifact.download_path' <<<"$JOB_RESULT_JSON")" || fail "job result endpoint did not include an artifact download path"
+
+step "Download export artifact"
+ARTIFACT_JSON="$(curl -sS "$BASE$ARTIFACT_PATH" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.tasks[0].id' <<<"$ARTIFACT_JSON")" == "$TASK_ID" ]] || fail "export artifact did not include the expected task"
+[[ "$(jq -r '.tasks[0].project_id' <<<"$ARTIFACT_JSON")" == "$PROJECT_ID" ]] || fail "export artifact did not include the expected project linkage"
+
+step "Bulk update task statuses"
+BULK_TASK_IDS=()
+for i in 1 2; do
+  BULK_TASK_JSON="$(
+    curl -sS -X POST "$BASE/v1/tasks" \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "Idempotency-Key: bulk-task-$i-$(date +%s)-$RANDOM" \
+      -H 'content-type: application/json' \
+      -d "{\"project_id\":\"$PROJECT_ID\",\"title\":\"Bulk smoke task $i\"}"
+  )"
+  BULK_TASK_IDS+=("$(jq -er '.id' <<<"$BULK_TASK_JSON")")
+done
+BULK_UPDATE_JSON="$(
+  curl -sS -X POST "$BASE/v1/tasks/bulk/status" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"task_ids\":[\"${BULK_TASK_IDS[0]}\",\"${BULK_TASK_IDS[1]}\"],\"status\":\"done\"}"
+)"
+[[ "$(jq -r '.updated' <<<"$BULK_UPDATE_JSON")" == "2" ]] || fail "bulk status update did not report two updated tasks"
+[[ "$(jq -r '.data[0].id' <<<"$BULK_UPDATE_JSON")" == "${BULK_TASK_IDS[0]}" ]] || fail "bulk status update did not preserve request order"
+[[ "$(jq -r '[.data[].status] | unique | join(",")' <<<"$BULK_UPDATE_JSON")" == "done" ]] || fail "bulk status update did not set every task to done"
+BULK_AUDIT_JSON="$(curl -sS "$BASE/v1/tasks/${BULK_TASK_IDS[0]}/audit?limit=5" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.data[0].event_type' <<<"$BULK_AUDIT_JSON")" == "task_status_updated" ]] || fail "bulk status update did not record an audit event"
+
+step "Register webhook and verify delivery tracking"
+WEBHOOK_JSON="$(
+  curl -sS -X POST "$BASE/v1/webhooks" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: webhook-$(date +%s)-$RANDOM" \
+    -H 'content-type: application/json' \
+    -d '{"url":"http://127.0.0.1:9/hook","events":["task_created"]}'
+)"
+WEBHOOK_ID="$(jq -er '.webhook.id' <<<"$WEBHOOK_JSON")" || fail "webhook create did not return an id"
+[[ -n "$(jq -r '.secret // empty' <<<"$WEBHOOK_JSON")" ]] || fail "webhook create did not return the signing secret"
+WEBHOOK_LIST_JSON="$(curl -sS "$BASE/v1/webhooks" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r 'length' <<<"$WEBHOOK_LIST_JSON")" == "1" ]] || fail "webhook list did not return the registered webhook"
+[[ "$(jq -r '.[0] | has("secret")' <<<"$WEBHOOK_LIST_JSON")" == "false" ]] || fail "webhook list leaked the signing secret"
+WEBHOOK_TASK_JSON="$(
+  curl -sS -X POST "$BASE/v1/tasks" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: webhook-task-$(date +%s)-$RANDOM" \
+    -H 'content-type: application/json' \
+    -d "{\"project_id\":\"$PROJECT_ID\",\"title\":\"Webhook smoke task\"}"
+)"
+jq -er '.id' <<<"$WEBHOOK_TASK_JSON" > /dev/null || fail "webhook trigger task was not created"
+WEBHOOK_DELIVERIES_JSON="$(curl -sS "$BASE/v1/webhooks/$WEBHOOK_ID/deliveries" -H "Authorization: Bearer $ACCESS_TOKEN")"
+[[ "$(jq -r '.data | length' <<<"$WEBHOOK_DELIVERIES_JSON")" == "1" ]] || fail "webhook delivery was not enqueued for the subscribed event"
+[[ "$(jq -r '.data[0].event_type' <<<"$WEBHOOK_DELIVERIES_JSON")" == "task_created" ]] || fail "webhook delivery recorded the wrong event type"
+WEBHOOK_PATCH_JSON="$(
+  curl -sS -X PATCH "$BASE/v1/webhooks/$WEBHOOK_ID" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d '{"is_active":false}'
+)"
+[[ "$(jq -r '.is_active' <<<"$WEBHOOK_PATCH_JSON")" == "false" ]] || fail "webhook patch did not disable the webhook"
+capture_http DELETE "$BASE/v1/webhooks/$WEBHOOK_ID" -H "Authorization: Bearer $ACCESS_TOKEN"
+[[ "$HTTP_STATUS" == "204" ]] || fail "webhook delete did not return 204"
+capture_http GET "$BASE/v1/webhooks/$WEBHOOK_ID/deliveries" -H "Authorization: Bearer $ACCESS_TOKEN"
+[[ "$HTTP_STATUS" == "404" ]] || fail "deleted webhook deliveries endpoint did not return 404"
+
+step "Invite a second member and enforce role boundaries"
+MEMBER_EMAIL="smoke-member-$(date +%s)-$RANDOM@example.com"
+MEMBER_REGISTER_JSON="$(
+  curl -sS -X POST "$BASE/v1/auth/register" \
+    -H 'content-type: application/json' \
+    -d "{\"email\":\"$MEMBER_EMAIL\",\"password\":\"$PASSWORD\",\"tenant_name\":\"$TENANT_NAME Member\"}"
+)"
+MEMBER_ACCESS_TOKEN="$(jq -er '.access_token' <<<"$MEMBER_REGISTER_JSON")"
+
+INVITE_JSON="$(
+  curl -sS -X POST "$BASE/v1/tenants/$TENANT_ID/invitations" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Idempotency-Key: smoke-invite-$(date +%s)-$RANDOM" \
+    -H 'content-type: application/json' \
+    -d "{\"email\":\"$MEMBER_EMAIL\",\"role\":\"member\"}"
+)"
+INVITE_TOKEN="$(jq -er '.token' <<<"$INVITE_JSON")"
+[[ "$(jq -r '.invitation.role' <<<"$INVITE_JSON")" == "member" ]] || fail "invitation did not carry the member role"
+
+ACCEPT_JSON="$(
+  curl -sS -X POST "$BASE/v1/tenants/$TENANT_ID/invitations/accept" \
+    -H "Authorization: Bearer $MEMBER_ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"token\":\"$INVITE_TOKEN\"}"
+)"
+[[ "$(jq -r '.role' <<<"$ACCEPT_JSON")" == "member" ]] || fail "invitation acceptance did not grant the member role"
+
+MEMBER_SWITCH_JSON="$(
+  curl -sS -X POST "$BASE/v1/auth/switch-tenant" \
+    -H "Authorization: Bearer $MEMBER_ACCESS_TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"tenant_id\":\"$TENANT_ID\"}"
+)"
+MEMBER_SCOPED_TOKEN="$(jq -er '.access_token' <<<"$MEMBER_SWITCH_JSON")"
+
+capture_http POST "$BASE/v1/projects" \
+  -H "Authorization: Bearer $MEMBER_SCOPED_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"name":"Forbidden project"}'
+[[ "$HTTP_STATUS" == "403" ]] || fail "member role was not blocked from creating a project"
+[[ "$(jq -r '.error.code' <<<"$HTTP_BODY")" == "forbidden" ]] || fail "member project creation did not return the forbidden envelope"
+
+MEMBERS_JSON="$(curl -sS "$BASE/v1/tenants/$TENANT_ID/members" -H "Authorization: Bearer $MEMBER_SCOPED_TOKEN")"
+[[ "$(jq -r 'length' <<<"$MEMBERS_JSON")" == "2" ]] || fail "member list did not include both members"
 
 step "Refresh and logout"
 REFRESH_JSON="$(
@@ -218,7 +410,7 @@ NEXT_REFRESH_TOKEN="$(jq -er '.refresh_token' <<<"$REFRESH_JSON")"
 LOGOUT_STATUS="$(
   curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/auth/logout" \
     -H 'content-type: application/json' \
-    -d "{\"refresh_token\":\"$NEXT_REFRESH_TOKEN\"}"
+    -d "{\"refresh_token\":\"$NEXT_REFRESH_TOKEN\",\"access_token\":\"$ACCESS_TOKEN\"}"
 )"
 [[ "$LOGOUT_STATUS" == "204" ]] || fail "logout did not return 204"
 
@@ -228,6 +420,9 @@ capture_http POST "$BASE/v1/auth/refresh" \
   -d "{\"refresh_token\":\"$NEXT_REFRESH_TOKEN\"}"
 [[ "$HTTP_STATUS" == "401" ]] || fail "revoked refresh token did not return 401"
 [[ "$(jq -r '.error.code' <<<"$HTTP_BODY")" == "unauthorized" ]] || fail "revoked refresh token did not return the expected error envelope"
+
+capture_http GET "$BASE/v1/me" -H "Authorization: Bearer $ACCESS_TOKEN"
+[[ "$HTTP_STATUS" == "401" ]] || fail "denylisted access token was not rejected after logout"
 
 METRICS_TEXT="$(curl -sS "$BASE/metrics")"
 grep -q 'http_requests_total' <<<"$METRICS_TEXT" || fail "/metrics did not include http_requests_total"

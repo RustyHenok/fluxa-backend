@@ -4,47 +4,105 @@ Enterprise-grade multi-tenant task platform built with `axum`, `tokio`, `sqlx`, 
 
 ## Features
 
-- Public REST API for auth, tenant-aware projects and task management, export jobs, health checks, and metrics
+- Public REST API for auth, account lifecycle, tenant-aware projects and task management, export jobs, audit trail, health checks, and metrics
 - Internal gRPC API for job administration and task read access
 - PostgreSQL-backed system of record with committed SQLx migrations
 - Redis-backed caching, idempotency handling, rate limiting, and job queue coordination
 - JWT access and refresh tokens with rotation
-- Background workers for task exports and due reminder sweeps
+- Background workers for task exports, due reminder sweeps, and outbox-based notification delivery (pluggable noop/log/SMTP mailer)
+- Export artifacts in JSON or CSV stored via a storage abstraction (local filesystem by default) with an authenticated download endpoint
+- Unified tenant audit log covering auth, membership, project, and account events
+- Soft delete with restore endpoints for projects and tasks, and full-text task search with substring fallback for short terms
+- Tenant-scoped task labels with per-label task filtering
+- Task comments with author-only edits, moderated deletes, and assignee notifications
+- Task file attachments stored through the artifact storage layer with size and per-task limits
+- Bulk task status updates for up to 100 tasks in one atomic request
+- Tenant webhooks with HMAC-SHA256-signed deliveries for task lifecycle events, retried through a durable outbox
+- Opt-in OTLP distributed tracing (`OTEL_EXPORTER_OTLP_ENDPOINT`) with W3C trace context propagation on inbound requests
+- OAuth login for Google and GitHub (`POST /v1/auth/oauth/:provider`) with verified-email linking and automatic account provisioning
 
 ## Main endpoints
 
 - `POST /v1/auth/register`
 - `POST /v1/auth/login`
+- `POST /v1/auth/oauth/:provider`
 - `POST /v1/auth/refresh`
 - `POST /v1/auth/logout`
+- `POST /v1/auth/verify-email`
+- `POST /v1/auth/resend-verification`
+- `POST /v1/auth/password-reset/request`
+- `POST /v1/auth/password-reset/confirm`
 - `POST /v1/auth/switch-tenant`
 - `GET /v1/dashboard/summary`
 - `GET /v1/me`
+- `PATCH /v1/me`
+- `GET /v1/me/notification-preferences`
+- `PATCH /v1/me/notification-preferences`
+- `GET /v1/me/notifications`
+- `POST /v1/me/notifications/read-all`
+- `POST /v1/me/notifications/:notification_id/read`
 - `GET /v1/me/tenants`
+- `GET /v1/me/oauth-accounts`
+- `DELETE /v1/me/oauth-accounts/:provider`
+- `GET /v1/me/sessions`
+- `DELETE /v1/me/sessions`
+- `DELETE /v1/me/sessions/:session_id`
+- `POST /v1/me/change-password`
+- `POST /v1/me/change-email`
+- `GET /v1/audit`
 - `GET /v1/tenants/:tenant_id/members`
+- `PATCH /v1/tenants/:tenant_id/members/:member_id`
+- `DELETE /v1/tenants/:tenant_id/members/:member_id`
+- `GET /v1/tenants/:tenant_id/invitations`
+- `POST /v1/tenants/:tenant_id/invitations`
+- `POST /v1/tenants/:tenant_id/invitations/accept`
+- `DELETE /v1/tenants/:tenant_id/invitations/:invitation_id`
 - `GET /v1/projects`
 - `POST /v1/projects`
 - `GET /v1/projects/:project_id`
 - `GET /v1/projects/:project_id/summary`
 - `PATCH /v1/projects/:project_id`
 - `DELETE /v1/projects/:project_id`
+- `POST /v1/projects/:project_id/restore`
 - `GET /v1/projects/:project_id/tasks`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
+- `POST /v1/tasks/bulk/status`
 - `GET /v1/tasks/:task_id`
 - `GET /v1/tasks/:task_id/audit`
 - `PATCH /v1/tasks/:task_id`
 - `DELETE /v1/tasks/:task_id`
+- `POST /v1/tasks/:task_id/restore`
+- `GET /v1/labels`
+- `POST /v1/labels`
+- `PATCH /v1/labels/:label_id`
+- `DELETE /v1/labels/:label_id`
+- `GET /v1/tasks/:task_id/labels`
+- `PUT /v1/tasks/:task_id/labels`
+- `GET /v1/tasks/:task_id/comments`
+- `POST /v1/tasks/:task_id/comments`
+- `PATCH /v1/tasks/:task_id/comments/:comment_id`
+- `DELETE /v1/tasks/:task_id/comments/:comment_id`
+- `GET /v1/tasks/:task_id/attachments`
+- `POST /v1/tasks/:task_id/attachments`
+- `GET /v1/tasks/:task_id/attachments/:attachment_id/download`
+- `DELETE /v1/tasks/:task_id/attachments/:attachment_id`
+- `GET /v1/webhooks`
+- `POST /v1/webhooks`
+- `PATCH /v1/webhooks/:webhook_id`
+- `DELETE /v1/webhooks/:webhook_id`
+- `GET /v1/webhooks/:webhook_id/deliveries`
 - `POST /v1/exports/tasks`
 - `GET /v1/jobs/:job_id`
 - `GET /v1/jobs/:job_id/result`
+- `GET /v1/jobs/:job_id/artifact`
 - `GET /healthz`
 - `GET /readyz`
 - `GET /metrics`
 
 ## Run locally
 
-1. Copy `.env.example` into `.env` and adjust the values for PostgreSQL, Redis, and `JWT_SECRET`.
+1. Copy `.env.example` into `.env` and adjust the values for PostgreSQL, Redis, `JWT_SECRET`, and `GRPC_AUTH_TOKEN`.
 2. Start PostgreSQL and Redis locally.
 3. Run the service:
 
@@ -65,13 +123,50 @@ docker compose up --build
 Important local ports:
 
 - REST API: `http://127.0.0.1:18080` by default
-- gRPC: `127.0.0.1:15051` by default
+- gRPC: `127.0.0.1:15051` by default (published on the loopback interface only)
 - PostgreSQL: `127.0.0.1:5432`
 - Redis: `127.0.0.1:16379` by default
 
-Set `HTTP_HOST_PORT`, `GRPC_HOST_PORT`, or `REDIS_HOST_PORT` before `docker compose up --build` if you want different published ports.
+Set `HTTP_HOST_PORT`, `GRPC_HOST_PORT`, or `REDIS_HOST_PORT` before `docker compose up --build` if you want different published ports. The gRPC port binds to `127.0.0.1` by default because it carries internal admin APIs; set `GRPC_HOST_BIND` to expose it more broadly.
 
-The compose file uses a development-only JWT secret and local database credentials. Override them before using the stack outside local development.
+The compose file uses a development-only JWT secret, gRPC auth token, and local database credentials. Override them before using the stack outside local development. The api and worker containers share an `exports-data` volume mounted at `/var/lib/fluxa/exports` so export artifacts produced by the worker can be downloaded through the API, and compose defaults `MAILER_PROVIDER=log` so notification emails are visible in the worker logs.
+
+## Notifications and account lifecycle
+
+Notifications (invitations, email verification, password resets, task due reminders) are written to a durable `notifications` outbox table and delivered by the worker's notifier loop through the configured mailer:
+
+- `MAILER_PROVIDER=noop` (default): notifications are marked sent without delivery — safe for existing deployments.
+- `MAILER_PROVIDER=log`: renders each message into the worker's structured logs — recommended for local development.
+- `MAILER_PROVIDER=smtp`: delivers real email; requires `SMTP_URL` (including credentials, e.g. `smtps` URL with userinfo) and `MAIL_FROM`.
+
+Registration enqueues a verification email automatically. Set `REQUIRE_EMAIL_VERIFICATION=true` to block login and refresh for unverified accounts (default `false` so existing deployments keep working). Passwords must be 10–128 characters and not among a small list of very common passwords. Password reset and resend-verification endpoints always return `202` to avoid account enumeration, and completing a reset or changing a password revokes all of the user's refresh tokens.
+
+Task due reminders are generated by the sweep worker into the outbox for each assignee (`task_due_soon` within `REMINDER_DUE_SOON_HOURS`, `task_overdue` past due), deduplicated per task, user, and `REMINDER_DEDUPE_TTL_HOURS` window.
+
+## Export artifacts
+
+`POST /v1/exports/tasks` accepts an optional `format` of `json` (default) or `csv`. The worker paginates through all matching tasks (no row cap), writes the artifact through the storage layer (`ARTIFACT_STORAGE_DIR`, local filesystem), and stores only metadata in the job result: task count, format, and an `artifact` object with a `download_path` of `GET /v1/jobs/:job_id/artifact`.
+
+## Task attachments
+
+`POST /v1/tasks/:task_id/attachments?file_name=report.pdf` uploads the raw request body (the request `Content-Type` is stored and echoed on download) through the same storage layer under `attachments/`. Uploads require an `Idempotency-Key`, are capped at `MAX_ATTACHMENT_SIZE_BYTES` (default 5 MiB, larger requests get `413`), and a task holds at most 20 attachments. The uploader or an owner/admin can delete an attachment, which also removes the stored file.
+
+## Audit trail
+
+Security- and tenancy-relevant events (logins, refreshes, logouts, registrations, verification, password/email changes, project create/update/delete, invitations, membership changes) are recorded in the `audit_log` table. Admins and owners can page through their tenant's events via `GET /v1/audit?limit=&cursor=`.
+
+## Webhooks
+
+Owners and admins can register up to 10 webhooks per tenant (`POST /v1/webhooks` with `url` and `events`). Supported events: `task_created`, `task_updated`, `task_status_updated`, `task_archived`, `task_restored`. Registration returns an HMAC-SHA256 signing `secret` exactly once; store it to verify deliveries. Private-network and loopback URLs are rejected unless `WEBHOOK_ALLOW_PRIVATE_URLS=true` (the Docker Compose stack enables it for local testing).
+
+Events are fanned out into a durable `webhook_deliveries` outbox and posted by the worker every `WEBHOOK_DISPATCH_INTERVAL_MS` with headers `X-Fluxa-Event`, `X-Fluxa-Delivery`, and `X-Fluxa-Signature: sha256=<hex hmac>` computed over the raw request body. Non-2xx responses are retried with exponential backoff up to 5 attempts before the delivery is parked as `dead_letter`. Delivery history is available via `GET /v1/webhooks/:webhook_id/deliveries`, and a `delivered` or `dead_letter` delivery can be requeued with a fresh attempt budget via `POST /v1/webhooks/:webhook_id/deliveries/:delivery_id/redeliver`.
+
+To verify a delivery, compute `HMAC-SHA256(secret, raw_body)`, hex-encode it, prefix with `sha256=`, and compare it to the `X-Fluxa-Signature` header using a constant-time comparison.
+
+## Operations
+
+The worker runs a daily retention sweep (`RETENTION_SWEEP_INTERVAL_HOURS`) that purges expired/revoked refresh tokens, terminal background jobs, terminal notifications, and old audit events past their `*_RETENTION_DAYS` windows. `GET /metrics` exposes per-route request counters and latency histograms plus DB pool, queued-job, and Redis queue-depth gauges (sampled every `SAMPLER_INTERVAL_MS`); set `METRICS_AUTH_TOKEN` to require a bearer token on the endpoint. Startup logs a warning when wildcard CORS or the compose development secrets are detected. See [`docs/operations.md`](docs/operations.md) for the runbook and [`deploy/kubernetes/`](deploy/kubernetes/) for reference manifests.
+
 
 ## Smoke test
 
@@ -109,3 +204,5 @@ cargo test --test stack_contracts -- --ignored --nocapture
 
 - `fluxa.internal.v1.JobAdmin`
 - `fluxa.internal.v1.TaskRead`
+
+Every gRPC request must carry an `authorization` metadata entry of the form `Bearer <token>` where the token matches the server's `GRPC_AUTH_TOKEN` setting (minimum 32 characters). Requests without a matching token are rejected with `UNAUTHENTICATED`. The shared token protects the internal admin surface; for production deployments, add mutual TLS between gRPC peers as the next hardening step.

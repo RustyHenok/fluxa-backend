@@ -19,6 +19,8 @@ pub enum AppError {
     #[error("{0}")]
     Conflict(String),
     #[error("{0}")]
+    PayloadTooLarge(String),
+    #[error("{0}")]
     RateLimited(String),
     #[error("{0}")]
     Internal(String),
@@ -36,6 +38,7 @@ impl AppError {
             Self::Forbidden(_) => "forbidden",
             Self::NotFound(_) => "not_found",
             Self::Conflict(_) => "conflict",
+            Self::PayloadTooLarge(_) => "payload_too_large",
             Self::RateLimited(_) => "rate_limited",
             Self::Internal(_) => "internal_error",
         }
@@ -48,6 +51,7 @@ impl AppError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -70,10 +74,10 @@ impl IntoResponse for AppError {
 
 impl From<sqlx::Error> for AppError {
     fn from(error: sqlx::Error) -> Self {
-        if let sqlx::Error::Database(db_error) = &error {
-            if db_error.code().as_deref() == Some("23505") {
-                return Self::Conflict("resource already exists".into());
-            }
+        if let sqlx::Error::Database(db_error) = &error
+            && db_error.code().as_deref() == Some("23505")
+        {
+            return Self::Conflict("resource already exists".into());
         }
 
         Self::Internal(format!("database error: {error}"))

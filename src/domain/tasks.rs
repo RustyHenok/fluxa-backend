@@ -19,6 +19,8 @@ pub const TASK_PRIORITY_MEDIUM: &str = "medium";
 pub const TASK_PRIORITY_HIGH: &str = "high";
 pub const TASK_PRIORITY_URGENT: &str = "urgent";
 
+pub const MAX_BULK_TASK_IDS: usize = 100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
@@ -107,6 +109,30 @@ pub fn validate_task_status(value: &str) -> AppResult<TaskStatus> {
     value.parse()
 }
 
+/// Deduplicates bulk task ids while preserving their first-seen order and
+/// enforcing the non-empty and maximum-size constraints.
+pub fn normalize_bulk_task_ids(task_ids: Vec<Uuid>) -> AppResult<Vec<Uuid>> {
+    let mut seen = std::collections::HashSet::with_capacity(task_ids.len());
+    let deduped: Vec<Uuid> = task_ids
+        .into_iter()
+        .filter(|task_id| seen.insert(*task_id))
+        .collect();
+
+    if deduped.is_empty() {
+        return Err(AppError::Validation(
+            "task_ids must contain at least one task id".into(),
+        ));
+    }
+
+    if deduped.len() > MAX_BULK_TASK_IDS {
+        return Err(AppError::Validation(format!(
+            "task_ids may contain at most {MAX_BULK_TASK_IDS} unique task ids"
+        )));
+    }
+
+    Ok(deduped)
+}
+
 pub fn validate_task_priority(value: &str) -> AppResult<TaskPriority> {
     value.parse()
 }
@@ -144,6 +170,7 @@ pub struct TaskFilters {
     pub priority: Option<TaskPriority>,
     pub project_id: Option<Uuid>,
     pub assignee_id: Option<Uuid>,
+    pub label_id: Option<Uuid>,
     pub due_before: Option<DateTime<Utc>>,
     pub due_after: Option<DateTime<Utc>>,
     pub updated_after: Option<DateTime<Utc>>,
@@ -161,6 +188,7 @@ impl TaskFilters {
             "priority": self.priority,
             "project_id": self.project_id,
             "assignee_id": self.assignee_id,
+            "label_id": self.label_id,
             "due_before": self.due_before,
             "due_after": self.due_after,
             "updated_after": self.updated_after,
@@ -203,10 +231,10 @@ pub struct UpdateTaskInput {
 
 impl UpdateTaskInput {
     pub fn validate(self) -> AppResult<Self> {
-        if let Some(title) = &self.title {
-            if title.trim().is_empty() {
-                return Err(AppError::Validation("title cannot be empty".into()));
-            }
+        if let Some(title) = &self.title
+            && title.trim().is_empty()
+        {
+            return Err(AppError::Validation("title cannot be empty".into()));
         }
         Ok(self)
     }
@@ -233,6 +261,16 @@ pub struct TaskAuditRecord {
 pub struct PaginatedTaskAudit {
     pub entries: Vec<TaskAuditRecord>,
     pub next_cursor: Option<AuditCursor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct DueReminderCandidate {
+    pub task_id: Uuid,
+    pub tenant_id: Uuid,
+    pub title: String,
+    pub due_at: Option<DateTime<Utc>>,
+    pub assignee_id: Uuid,
+    pub email: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -305,5 +343,27 @@ impl From<&TaskAuditRecord> for TaskAuditResponse {
             payload: value.payload.clone(),
             created_at: value.created_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bulk_task_ids_are_deduplicated_in_order() {
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let normalized =
+            normalize_bulk_task_ids(vec![first, second, first]).expect("ids should normalize");
+        assert_eq!(normalized, vec![first, second]);
+    }
+
+    #[test]
+    fn bulk_task_ids_reject_empty_and_oversized_lists() {
+        assert!(normalize_bulk_task_ids(Vec::new()).is_err());
+
+        let oversized: Vec<Uuid> = (0..=MAX_BULK_TASK_IDS).map(|_| Uuid::new_v4()).collect();
+        assert!(normalize_bulk_task_ids(oversized).is_err());
     }
 }

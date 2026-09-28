@@ -1,13 +1,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::domain::{
     CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TaskFilters, TaskRecord,
-    TaskResponse, UpdateTaskInput,
+    TaskResponse, TaskStatus, UpdateTaskInput, WEBHOOK_EVENT_TASK_ARCHIVED,
+    WEBHOOK_EVENT_TASK_CREATED, WEBHOOK_EVENT_TASK_RESTORED, WEBHOOK_EVENT_TASK_STATUS_UPDATED,
+    WEBHOOK_EVENT_TASK_UPDATED, normalize_bulk_task_ids,
 };
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
+use crate::services::webhooks as webhook_service;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +131,7 @@ pub async fn create_task(
     ensure_project_belongs_to_tenant(state, tenant_id, input.project_id).await?;
     let task = state.db.create_task(tenant_id, actor_id, input).await?;
     state.cache.bump_tenant_cache_version(tenant_id).await?;
+    emit_task_webhook(state, tenant_id, WEBHOOK_EVENT_TASK_CREATED, &task).await;
     Ok(task)
 }
 
@@ -144,27 +150,72 @@ pub async fn update_task(
         .update_task(tenant_id, task_id, actor_id, input)
         .await?;
     state.cache.bump_tenant_cache_version(tenant_id).await?;
+    emit_task_webhook(state, tenant_id, WEBHOOK_EVENT_TASK_UPDATED, &task).await;
     Ok(task)
 }
 
-pub async fn delete_task(
+pub async fn bulk_update_task_status(
+    state: &AppState,
+    tenant_id: Uuid,
+    actor_id: Uuid,
+    task_ids: Vec<Uuid>,
+    status: TaskStatus,
+) -> AppResult<Vec<TaskRecord>> {
+    let task_ids = normalize_bulk_task_ids(task_ids)?;
+    let mut tasks = state
+        .db
+        .bulk_update_task_status(tenant_id, actor_id, &task_ids, status)
+        .await?;
+    state.cache.bump_tenant_cache_version(tenant_id).await?;
+
+    // Return records in the order the ids were requested.
+    let positions: HashMap<Uuid, usize> = task_ids
+        .iter()
+        .enumerate()
+        .map(|(index, task_id)| (*task_id, index))
+        .collect();
+    tasks.sort_by_key(|task| positions.get(&task.id).copied().unwrap_or(usize::MAX));
+    for task in &tasks {
+        emit_task_webhook(state, tenant_id, WEBHOOK_EVENT_TASK_STATUS_UPDATED, task).await;
+    }
+    Ok(tasks)
+}
+
+pub async fn archive_task(
     state: &AppState,
     tenant_id: Uuid,
     task_id: Uuid,
     actor_id: Uuid,
 ) -> AppResult<()> {
-    state.db.delete_task(tenant_id, task_id, actor_id).await?;
+    let task = state.db.archive_task(tenant_id, task_id, actor_id).await?;
     state.cache.bump_tenant_cache_version(tenant_id).await?;
+    emit_task_webhook(state, tenant_id, WEBHOOK_EVENT_TASK_ARCHIVED, &task).await;
     Ok(())
+}
+
+pub async fn restore_task(
+    state: &AppState,
+    tenant_id: Uuid,
+    task_id: Uuid,
+    actor_id: Uuid,
+) -> AppResult<TaskRecord> {
+    let task = state.db.restore_task(tenant_id, task_id, actor_id).await?;
+    state.cache.bump_tenant_cache_version(tenant_id).await?;
+    emit_task_webhook(state, tenant_id, WEBHOOK_EVENT_TASK_RESTORED, &task).await;
+    Ok(task)
 }
 
 pub async fn export_tasks(
     state: &AppState,
     tenant_id: Uuid,
     filters: &TaskFilters,
+    cursor: Option<&Cursor>,
     limit: usize,
 ) -> AppResult<Vec<TaskRecord>> {
-    state.db.export_tasks(tenant_id, filters, limit).await
+    state
+        .db
+        .export_tasks(tenant_id, filters, cursor, limit)
+        .await
 }
 
 pub async fn record_due_reminders(state: &AppState, tenant_id: Option<Uuid>) -> AppResult<usize> {
@@ -187,4 +238,25 @@ async fn ensure_project_belongs_to_tenant(
         .ok_or_else(|| AppError::NotFound("project not found".into()))?;
 
     Ok(())
+}
+
+/// Serializes the task and queues webhook deliveries. Failures never break
+/// the primary task operation.
+async fn emit_task_webhook(state: &AppState, tenant_id: Uuid, event_type: &str, task: &TaskRecord) {
+    let payload = TaskResponse::try_from(task).and_then(|response| {
+        serde_json::to_value(response)
+            .map_err(|error| AppError::internal(format!("failed to serialize task: {error}")))
+    });
+    match payload {
+        Ok(payload) => {
+            webhook_service::emit_task_event(state, tenant_id, event_type, &payload).await;
+        }
+        Err(error) => {
+            warn!(
+                %tenant_id,
+                event_type,
+                "failed to build webhook payload: {error}"
+            );
+        }
+    }
 }

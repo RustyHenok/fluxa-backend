@@ -1,36 +1,57 @@
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::response::IntoResponse;
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::cache::StoredResponse;
 use crate::domain::{
-    CreateProjectInput, CreateTaskInput, DashboardSummary, JobResponse, JobResultResponse,
-    ProjectResponse, ProjectSummary, TaskAuditResponse, TaskResponse, TenantMemberResponse,
-    TenantMembershipResponse, UpdateProjectInput, UpdateTaskInput, UserResponse,
+    AttachmentResponse, normalize_attachment_content_type, validate_attachment_file_name,
+};
+use crate::domain::{CommentResponse, validate_comment_body};
+use crate::domain::{
+    CreateLabelInput, CreateProjectInput, CreateTaskInput, DashboardSummary, InvitationResponse,
+    JobResponse, JobResultResponse, LabelResponse, NotificationFeedResponse,
+    NotificationPreferencesResponse, PaginatedAuditEvents, ProjectResponse, ProjectSummary,
+    TaskAuditResponse, TaskResponse, TenantMemberResponse, TenantMembershipResponse,
+    UpdateLabelInput, UpdateProjectInput, UpdateTaskInput, UserResponse, validate_role,
     validate_task_priority, validate_task_status,
 };
+use crate::domain::{WebhookDeliveryResponse, WebhookResponse};
 use crate::error::{AppError, AppResult};
 use crate::pagination::{AuditCursor, Cursor};
 use crate::services::{
-    auth as auth_service, jobs as jobs_service, projects as project_service, tasks as task_service,
+    account as account_service, attachments as attachment_service, audit as audit_service,
+    auth as auth_service, comments as comment_service, jobs as jobs_service,
+    labels as label_service, memberships as membership_service,
+    notifications as notification_service, oauth as oauth_service, projects as project_service,
+    tasks as task_service, webhooks as webhook_service,
 };
 use crate::state::AppState;
+use crate::storage::ArtifactStore;
 
 use super::AuthenticatedUser;
 use super::dto::{
-    AuthResponse, ExportRequest, HealthResponse, LoginRequest, LogoutRequest, MeResponse,
-    ProjectPatchPayload, ProjectPayload, RefreshRequest, RegisterRequest, SwitchTenantRequest,
-    TaskAuditListResponse, TaskAuditQuery, TaskListQuery, TaskListResponse, TaskPatchPayload,
-    TaskPayload,
+    AttachmentUploadQuery, AuditListQuery, AuthResponse, BulkTaskStatusPayload,
+    BulkTaskStatusResponse, ChangeEmailPayload, ChangePasswordPayload, CommentListQuery,
+    CommentListResponse, CommentPatchPayload, CommentPayload, ExportRequest, HealthResponse,
+    InvitationAcceptPayload, InvitationCreatePayload, InvitationCreateResponse, LabelPatchPayload,
+    LabelPayload, LoginRequest, LogoutRequest, MeResponse, MemberRolePayload,
+    NotificationListQuery, NotificationPreferencesPayload, NotificationsReadAllResponse,
+    OAuthAccountResponse, OAuthLoginRequest, PasswordResetConfirmPayload,
+    PasswordResetRequestPayload, ProjectPatchPayload, ProjectPayload, RefreshRequest,
+    RegisterRequest, ResendVerificationPayload, SessionResponse, SwitchTenantRequest,
+    TaskAuditListResponse, TaskAuditQuery, TaskLabelsPayload, TaskListQuery, TaskListResponse,
+    TaskPatchPayload, TaskPayload, UpdateProfilePayload, VerifyEmailPayload, WebhookCreateResponse,
+    WebhookDeliveryListQuery, WebhookDeliveryListResponse, WebhookPatchPayload, WebhookPayload,
 };
 use super::helpers::{
-    ensure_admin_role, ensure_task_write_role, normalize_email, normalize_optional_choice,
-    replay_idempotent, required_idempotency_key, validate_password,
+    bearer_token, ensure_active_tenant, ensure_admin_role, ensure_task_write_role, normalize_email,
+    normalize_optional_choice, replay_idempotent, required_idempotency_key, validate_password,
 };
 
 pub(super) async fn healthz() -> Json<HealthResponse<'static>> {
@@ -45,11 +66,33 @@ pub(super) async fn readyz(
     Ok(Json(HealthResponse { status: "ready" }))
 }
 
-pub(super) async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
-    (
+pub(super) async fn metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    if let Some(expected) = state.config.metrics_auth_token.as_deref() {
+        let provided = super::helpers::bearer_token(&headers)?;
+        if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+            return Err(AppError::Unauthorized("invalid metrics token".into()));
+        }
+    }
+
+    Ok((
         [(CONTENT_TYPE, "text/plain; version=0.0.4")],
         state.metrics.render(),
-    )
+    ))
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    let mut diff = 0u8;
+    for (a, b) in left.iter().zip(right.iter()) {
+        diff |= a ^ b;
+    }
+    diff == 0
 }
 
 pub(super) async fn register(
@@ -89,6 +132,40 @@ pub(super) async fn login(
     }))
 }
 
+pub(super) async fn oauth_login(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+    Json(payload): Json<OAuthLoginRequest>,
+) -> AppResult<Json<AuthResponse>> {
+    let provider = provider.trim().to_ascii_lowercase();
+    if payload.code.trim().is_empty() {
+        return Err(AppError::Validation("code must not be empty".into()));
+    }
+    if payload.redirect_uri.trim().is_empty() {
+        return Err(AppError::Validation(
+            "redirect_uri must not be empty".into(),
+        ));
+    }
+
+    let session = oauth_service::oauth_login(
+        &state,
+        &provider,
+        payload.code.trim(),
+        payload.redirect_uri.trim(),
+        payload.tenant_id,
+        payload.tenant_name,
+    )
+    .await?;
+
+    Ok(Json(AuthResponse {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        expires_in_seconds: session.expires_in_seconds,
+        user: UserResponse::from(&session.user),
+        active_tenant: TenantMembershipResponse::try_from(&session.membership)?,
+    }))
+}
+
 pub(super) async fn refresh(
     State(state): State<AppState>,
     Json(payload): Json<RefreshRequest>,
@@ -106,10 +183,101 @@ pub(super) async fn refresh(
 
 pub(super) async fn logout(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<LogoutRequest>,
 ) -> AppResult<StatusCode> {
-    auth_service::logout(&state, &payload.refresh_token).await?;
+    let header_access_token = bearer_token(&headers).ok();
+    let access_token = payload.access_token.as_deref().or(header_access_token);
+    auth_service::logout(&state, &payload.refresh_token, access_token).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn verify_email(
+    State(state): State<AppState>,
+    Json(payload): Json<VerifyEmailPayload>,
+) -> AppResult<StatusCode> {
+    let token = payload.token.trim();
+    if token.is_empty() {
+        return Err(AppError::Validation("token must not be empty".into()));
+    }
+    account_service::verify_email(&state, token).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn resend_verification(
+    State(state): State<AppState>,
+    Json(payload): Json<ResendVerificationPayload>,
+) -> AppResult<StatusCode> {
+    let email = normalize_email(&payload.email)?;
+    account_service::resend_verification(&state, &email).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+pub(super) async fn request_password_reset(
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordResetRequestPayload>,
+) -> AppResult<StatusCode> {
+    let email = normalize_email(&payload.email)?;
+    account_service::request_password_reset(&state, &email).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+pub(super) async fn confirm_password_reset(
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordResetConfirmPayload>,
+) -> AppResult<StatusCode> {
+    let token = payload.token.trim();
+    if token.is_empty() {
+        return Err(AppError::Validation("token must not be empty".into()));
+    }
+    validate_password(&payload.new_password)?;
+    account_service::confirm_password_reset(&state, token, &payload.new_password).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn change_password(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<ChangePasswordPayload>,
+) -> AppResult<StatusCode> {
+    validate_password(&payload.new_password)?;
+    account_service::change_password(
+        &state,
+        user.user_id,
+        &payload.current_password,
+        &payload.new_password,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn change_email(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<ChangeEmailPayload>,
+) -> AppResult<Json<UserResponse>> {
+    let email = normalize_email(&payload.new_email)?;
+    let updated =
+        account_service::change_email(&state, user.user_id, &payload.current_password, &email)
+            .await?;
+    Ok(Json(UserResponse::from(&updated)))
+}
+
+pub(super) async fn list_audit_events(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Query(query): Query<AuditListQuery>,
+) -> AppResult<Json<PaginatedAuditEvents>> {
+    ensure_admin_role(user.role)?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(AuditCursor::decode)
+        .transpose()?;
+
+    let page = audit_service::list_events(&state, user.tenant_id, cursor.as_ref(), limit).await?;
+    Ok(Json(page))
 }
 
 pub(super) async fn switch_tenant(
@@ -140,6 +308,87 @@ pub(super) async fn me(
     }))
 }
 
+pub(super) async fn update_profile(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<UpdateProfilePayload>,
+) -> AppResult<Json<UserResponse>> {
+    let Some(display_name) = payload.display_name else {
+        return Err(AppError::Validation(
+            "at least one profile field must be provided".into(),
+        ));
+    };
+    let updated =
+        account_service::update_profile(&state, user.tenant_id, user.user_id, display_name).await?;
+    Ok(Json(UserResponse::from(&updated)))
+}
+
+pub(super) async fn get_notification_preferences(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<NotificationPreferencesResponse>> {
+    let preferences = account_service::get_notification_preferences(&state, user.user_id).await?;
+    Ok(Json(preferences))
+}
+
+pub(super) async fn update_notification_preferences(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<NotificationPreferencesPayload>,
+) -> AppResult<Json<NotificationPreferencesResponse>> {
+    let preferences = account_service::update_notification_preferences(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        payload.task_due_soon,
+        payload.task_overdue,
+        payload.task_commented,
+    )
+    .await?;
+    Ok(Json(preferences))
+}
+
+pub(super) async fn list_my_notifications(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Query(query): Query<NotificationListQuery>,
+) -> AppResult<Json<NotificationFeedResponse>> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(AuditCursor::decode)
+        .transpose()?;
+
+    let feed = notification_service::list_feed(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        query.unread.unwrap_or(false),
+        cursor.as_ref(),
+        limit,
+    )
+    .await?;
+    Ok(Json(feed))
+}
+
+pub(super) async fn mark_notification_read(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(notification_id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    notification_service::mark_read(&state, user.tenant_id, user.user_id, notification_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn mark_all_notifications_read(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<NotificationsReadAllResponse>> {
+    let updated = notification_service::mark_all_read(&state, user.tenant_id, user.user_id).await?;
+    Ok(Json(NotificationsReadAllResponse { updated }))
+}
+
 pub(super) async fn list_my_tenants(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -151,6 +400,69 @@ pub(super) async fn list_my_tenants(
             .map(TenantMembershipResponse::try_from)
             .collect::<AppResult<Vec<_>>>()?,
     ))
+}
+
+pub(super) async fn list_oauth_accounts(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<Vec<OAuthAccountResponse>>> {
+    let accounts = oauth_service::list_oauth_accounts(&state, user.user_id).await?;
+    Ok(Json(
+        accounts
+            .into_iter()
+            .map(|account| OAuthAccountResponse {
+                provider: account.provider,
+                linked_at: account.created_at,
+            })
+            .collect(),
+    ))
+}
+
+pub(super) async fn unlink_oauth_account(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(provider): Path<String>,
+) -> AppResult<StatusCode> {
+    let provider = provider.trim().to_ascii_lowercase();
+    oauth_service::unlink_oauth_account(&state, user.tenant_id, user.user_id, &provider).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn list_sessions(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<Vec<SessionResponse>>> {
+    let sessions = auth_service::list_sessions(&state, user.user_id).await?;
+    Ok(Json(
+        sessions
+            .into_iter()
+            .map(|session| SessionResponse {
+                id: session.id,
+                tenant_id: session.tenant_id,
+                created_at: session.created_at,
+                expires_at: session.expires_at,
+            })
+            .collect(),
+    ))
+}
+
+pub(super) async fn revoke_session(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(session_id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    auth_service::revoke_session(&state, user.tenant_id, user.user_id, session_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn logout_all_sessions(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+) -> AppResult<StatusCode> {
+    let access_token = bearer_token(&headers)?;
+    auth_service::logout_all(&state, user.tenant_id, user.user_id, access_token).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(super) async fn list_tenant_members(
@@ -168,6 +480,153 @@ pub(super) async fn list_tenant_members(
     ))
 }
 
+pub(super) async fn create_invitation(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(tenant_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<InvitationCreatePayload>,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    let email = normalize_email(&payload.email)?;
+    let role = validate_role(payload.role.trim().to_ascii_lowercase().as_str())?;
+
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(tenant_id, "invitations:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match membership_service::create_invitation(
+        &state,
+        tenant_id,
+        user.role,
+        user.user_id,
+        &email,
+        role,
+    )
+    .await
+    {
+        Ok(created) => {
+            let body = serde_json::to_value(InvitationCreateResponse {
+                invitation: InvitationResponse::try_from(&created.invitation)?,
+                token: created.token,
+            })
+            .map_err(|error| {
+                AppError::internal(format!("failed to serialize invitation: {error}"))
+            })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn list_invitations(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(tenant_id): Path<Uuid>,
+) -> AppResult<Json<Vec<InvitationResponse>>> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    let invitations = membership_service::list_invitations(&state, tenant_id).await?;
+
+    Ok(Json(
+        invitations
+            .iter()
+            .map(InvitationResponse::try_from)
+            .collect::<AppResult<Vec<_>>>()?,
+    ))
+}
+
+pub(super) async fn revoke_invitation(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((tenant_id, invitation_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    membership_service::revoke_invitation(&state, tenant_id, user.user_id, invitation_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn accept_invitation(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(tenant_id): Path<Uuid>,
+    Json(payload): Json<InvitationAcceptPayload>,
+) -> AppResult<Json<TenantMembershipResponse>> {
+    let token = payload.token.trim();
+    if token.is_empty() {
+        return Err(AppError::Validation("token must not be empty".into()));
+    }
+
+    let membership =
+        membership_service::accept_invitation(&state, tenant_id, user.user_id, token).await?;
+    Ok(Json(TenantMembershipResponse::try_from(&membership)?))
+}
+
+pub(super) async fn update_member_role(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((tenant_id, member_id)): Path<(Uuid, Uuid)>,
+    Json(payload): Json<MemberRolePayload>,
+) -> AppResult<Json<TenantMemberResponse>> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    let role = validate_role(payload.role.trim().to_ascii_lowercase().as_str())?;
+
+    let member = membership_service::update_member_role(
+        &state,
+        tenant_id,
+        user.role,
+        user.user_id,
+        member_id,
+        role,
+    )
+    .await?;
+    Ok(Json(TenantMemberResponse::try_from(&member)?))
+}
+
+pub(super) async fn remove_member(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((tenant_id, member_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    ensure_active_tenant(user.tenant_id, tenant_id)?;
+    ensure_admin_role(user.role)?;
+    membership_service::remove_member(&state, tenant_id, user.role, user.user_id, member_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(super) async fn list_projects(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -179,8 +638,9 @@ pub(super) async fn list_projects(
 pub(super) async fn create_project(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
     Json(payload): Json<ProjectPayload>,
-) -> AppResult<(StatusCode, Json<ProjectResponse>)> {
+) -> AppResult<(StatusCode, Json<Value>)> {
     ensure_admin_role(user.role)?;
     let input = CreateProjectInput {
         name: payload.name,
@@ -188,9 +648,48 @@ pub(super) async fn create_project(
     }
     .validate()?;
 
-    let project =
-        project_service::create_project(&state, user.tenant_id, user.user_id, input).await?;
-    Ok((StatusCode::CREATED, Json(ProjectResponse::from(&project))))
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(user.tenant_id, "projects:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match project_service::create_project(&state, user.tenant_id, user.user_id, input).await {
+        Ok(project) => {
+            let body = serde_json::to_value(ProjectResponse::from(&project)).map_err(|error| {
+                AppError::internal(format!("failed to serialize project: {error}"))
+            })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
 }
 
 pub(super) async fn get_project(
@@ -265,7 +764,546 @@ pub(super) async fn delete_project(
     Path(project_id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
     ensure_admin_role(user.role)?;
-    project_service::delete_project(&state, user.tenant_id, project_id).await?;
+    project_service::archive_project(&state, user.tenant_id, user.user_id, project_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn restore_project(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(project_id): Path<Uuid>,
+) -> AppResult<Json<ProjectResponse>> {
+    ensure_admin_role(user.role)?;
+    let project =
+        project_service::restore_project(&state, user.tenant_id, user.user_id, project_id).await?;
+    Ok(Json(ProjectResponse::from(&project)))
+}
+
+pub(super) async fn list_labels(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<Vec<LabelResponse>>> {
+    let labels = label_service::list_labels(&state, user.tenant_id).await?;
+    Ok(Json(labels.iter().map(LabelResponse::from).collect()))
+}
+
+pub(super) async fn create_label(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+    Json(payload): Json<LabelPayload>,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    ensure_admin_role(user.role)?;
+    let input = CreateLabelInput {
+        name: payload.name,
+        color: payload.color,
+    }
+    .validate()?;
+
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(user.tenant_id, "labels:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match label_service::create_label(&state, user.tenant_id, user.user_id, input).await {
+        Ok(label) => {
+            let body = serde_json::to_value(LabelResponse::from(&label)).map_err(|error| {
+                AppError::internal(format!("failed to serialize label: {error}"))
+            })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn update_label(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(label_id): Path<Uuid>,
+    Json(payload): Json<LabelPatchPayload>,
+) -> AppResult<Json<LabelResponse>> {
+    ensure_admin_role(user.role)?;
+    let input = UpdateLabelInput {
+        name: payload.name,
+        color: payload.color,
+    }
+    .validate()?;
+
+    let label =
+        label_service::update_label(&state, user.tenant_id, label_id, user.user_id, input).await?;
+    Ok(Json(LabelResponse::from(&label)))
+}
+
+pub(super) async fn delete_label(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(label_id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    ensure_admin_role(user.role)?;
+    label_service::delete_label(&state, user.tenant_id, label_id, user.user_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn get_task_labels(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+) -> AppResult<Json<Vec<LabelResponse>>> {
+    let labels = label_service::list_task_labels(&state, user.tenant_id, task_id).await?;
+    Ok(Json(labels.iter().map(LabelResponse::from).collect()))
+}
+
+pub(super) async fn put_task_labels(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+    Json(payload): Json<TaskLabelsPayload>,
+) -> AppResult<Json<Vec<LabelResponse>>> {
+    ensure_task_write_role(user.role)?;
+    let labels = label_service::set_task_labels(
+        &state,
+        user.tenant_id,
+        task_id,
+        user.user_id,
+        payload.label_ids,
+    )
+    .await?;
+    Ok(Json(labels.iter().map(LabelResponse::from).collect()))
+}
+
+pub(super) async fn list_webhooks(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> AppResult<Json<Vec<WebhookResponse>>> {
+    ensure_admin_role(user.role)?;
+    let webhooks = webhook_service::list_webhooks(&state, user.tenant_id).await?;
+    Ok(Json(webhooks.iter().map(WebhookResponse::from).collect()))
+}
+
+pub(super) async fn create_webhook(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+    Json(payload): Json<WebhookPayload>,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    ensure_admin_role(user.role)?;
+
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(user.tenant_id, "webhooks:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match webhook_service::create_webhook(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        &payload.url,
+        payload.events,
+    )
+    .await
+    {
+        Ok(webhook) => {
+            let body = serde_json::to_value(WebhookCreateResponse {
+                secret: webhook.secret.clone(),
+                webhook: WebhookResponse::from(&webhook),
+            })
+            .map_err(|error| AppError::internal(format!("failed to serialize webhook: {error}")))?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn update_webhook(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(webhook_id): Path<Uuid>,
+    Json(payload): Json<WebhookPatchPayload>,
+) -> AppResult<Json<WebhookResponse>> {
+    ensure_admin_role(user.role)?;
+    let webhook = webhook_service::update_webhook(
+        &state,
+        user.tenant_id,
+        webhook_id,
+        payload.url,
+        payload.events,
+        payload.is_active,
+    )
+    .await?;
+    Ok(Json(WebhookResponse::from(&webhook)))
+}
+
+pub(super) async fn delete_webhook(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(webhook_id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    ensure_admin_role(user.role)?;
+    webhook_service::delete_webhook(&state, user.tenant_id, webhook_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn list_webhook_deliveries(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(webhook_id): Path<Uuid>,
+    Query(query): Query<WebhookDeliveryListQuery>,
+) -> AppResult<Json<WebhookDeliveryListResponse>> {
+    ensure_admin_role(user.role)?;
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(AuditCursor::decode)
+        .transpose()?;
+    let page = webhook_service::list_webhook_deliveries(
+        &state,
+        user.tenant_id,
+        webhook_id,
+        cursor.as_ref(),
+        limit,
+    )
+    .await?;
+
+    Ok(Json(WebhookDeliveryListResponse {
+        data: page
+            .deliveries
+            .iter()
+            .map(WebhookDeliveryResponse::from)
+            .collect(),
+        next_cursor: page.next_cursor.map(|value| value.encode()).transpose()?,
+    }))
+}
+
+pub(super) async fn redeliver_webhook_delivery(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((webhook_id, delivery_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<(StatusCode, Json<WebhookDeliveryResponse>)> {
+    ensure_admin_role(user.role)?;
+    let delivery = webhook_service::redeliver_webhook_delivery(
+        &state,
+        user.tenant_id,
+        webhook_id,
+        delivery_id,
+    )
+    .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(WebhookDeliveryResponse::from(&delivery)),
+    ))
+}
+
+pub(super) async fn list_task_comments(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+    Query(query): Query<CommentListQuery>,
+) -> AppResult<Json<CommentListResponse>> {
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(AuditCursor::decode)
+        .transpose()?;
+    let page =
+        comment_service::list_comments(&state, user.tenant_id, task_id, cursor.as_ref(), limit)
+            .await?;
+
+    Ok(Json(CommentListResponse {
+        data: page.comments.iter().map(CommentResponse::from).collect(),
+        next_cursor: page.next_cursor.map(|value| value.encode()).transpose()?,
+    }))
+}
+
+pub(super) async fn create_task_comment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<CommentPayload>,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    ensure_task_write_role(user.role)?;
+    let body = validate_comment_body(&payload.body)?;
+
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key = state
+        .cache
+        .idempotency_key(user.tenant_id, "comments:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match comment_service::create_comment(&state, user.tenant_id, task_id, user.user_id, body).await
+    {
+        Ok(comment) => {
+            let body = serde_json::to_value(CommentResponse::from(&comment)).map_err(|error| {
+                AppError::internal(format!("failed to serialize comment: {error}"))
+            })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn update_task_comment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((task_id, comment_id)): Path<(Uuid, Uuid)>,
+    Json(payload): Json<CommentPatchPayload>,
+) -> AppResult<Json<CommentResponse>> {
+    ensure_task_write_role(user.role)?;
+    let body = validate_comment_body(&payload.body)?;
+    let comment = comment_service::update_comment(
+        &state,
+        user.tenant_id,
+        task_id,
+        comment_id,
+        user.user_id,
+        body,
+    )
+    .await?;
+    Ok(Json(CommentResponse::from(&comment)))
+}
+
+pub(super) async fn delete_task_comment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((task_id, comment_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    comment_service::delete_comment(
+        &state,
+        user.tenant_id,
+        task_id,
+        comment_id,
+        user.user_id,
+        user.role,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn list_task_attachments(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+) -> AppResult<Json<Vec<AttachmentResponse>>> {
+    let attachments = attachment_service::list_attachments(&state, user.tenant_id, task_id).await?;
+    Ok(Json(
+        attachments.iter().map(AttachmentResponse::from).collect(),
+    ))
+}
+
+pub(super) async fn upload_task_attachment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+    Query(query): Query<AttachmentUploadQuery>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    ensure_task_write_role(user.role)?;
+    let file_name = validate_attachment_file_name(&query.file_name)?;
+    let content_type = normalize_attachment_content_type(
+        headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+    );
+    if body.is_empty() {
+        return Err(AppError::Validation(
+            "attachment body must not be empty".into(),
+        ));
+    }
+    if body.len() > state.config.max_attachment_size_bytes {
+        return Err(AppError::PayloadTooLarge(format!(
+            "attachment exceeds the maximum size of {} bytes",
+            state.config.max_attachment_size_bytes
+        )));
+    }
+
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let cache_key =
+        state
+            .cache
+            .idempotency_key(user.tenant_id, "attachments:create", idempotency_key);
+
+    if let Some(response) = replay_idempotent(&state, &cache_key).await? {
+        return Ok(response);
+    }
+
+    if !state
+        .cache
+        .claim_idempotency_key(&cache_key, state.config.idempotency_ttl())
+        .await?
+    {
+        return match replay_idempotent(&state, &cache_key).await? {
+            Some(response) => Ok(response),
+            None => Err(AppError::Conflict(
+                "request with this idempotency key is still in progress".into(),
+            )),
+        };
+    }
+
+    match attachment_service::upload_attachment(
+        &state,
+        user.tenant_id,
+        task_id,
+        user.user_id,
+        file_name,
+        content_type,
+        &body,
+    )
+    .await
+    {
+        Ok(attachment) => {
+            let body =
+                serde_json::to_value(AttachmentResponse::from(&attachment)).map_err(|error| {
+                    AppError::internal(format!("failed to serialize attachment: {error}"))
+                })?;
+            let stored = StoredResponse {
+                status: StatusCode::CREATED.as_u16(),
+                body: body.clone(),
+            };
+            state
+                .cache
+                .store_idempotency_response(&cache_key, &stored, state.config.idempotency_ttl())
+                .await?;
+            Ok((StatusCode::CREATED, Json(body)))
+        }
+        Err(error) => {
+            state.cache.delete_key(&cache_key).await?;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn download_task_attachment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((task_id, attachment_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<impl IntoResponse> {
+    let (attachment, bytes) =
+        attachment_service::download_attachment(&state, user.tenant_id, task_id, attachment_id)
+            .await?;
+
+    let safe_name: String = attachment
+        .file_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok((
+        [
+            (CONTENT_TYPE, attachment.content_type),
+            (
+                CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{safe_name}\""),
+            ),
+        ],
+        bytes,
+    ))
+}
+
+pub(super) async fn delete_task_attachment(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((task_id, attachment_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    attachment_service::delete_attachment(
+        &state,
+        user.tenant_id,
+        task_id,
+        attachment_id,
+        user.user_id,
+        user.role,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -425,14 +1463,49 @@ pub(super) async fn update_task(
     Ok(Json(TaskResponse::try_from(&task)?))
 }
 
+pub(super) async fn bulk_update_task_status(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<BulkTaskStatusPayload>,
+) -> AppResult<Json<BulkTaskStatusResponse>> {
+    ensure_task_write_role(user.role)?;
+    let status = validate_task_status(payload.status.trim())?;
+    let tasks = task_service::bulk_update_task_status(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        payload.task_ids,
+        status,
+    )
+    .await?;
+
+    Ok(Json(BulkTaskStatusResponse {
+        updated: tasks.len(),
+        data: tasks
+            .iter()
+            .map(TaskResponse::try_from)
+            .collect::<AppResult<Vec<_>>>()?,
+    }))
+}
+
 pub(super) async fn delete_task(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(task_id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
     ensure_admin_role(user.role)?;
-    task_service::delete_task(&state, user.tenant_id, task_id, user.user_id).await?;
+    task_service::archive_task(&state, user.tenant_id, task_id, user.user_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn restore_task(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(task_id): Path<Uuid>,
+) -> AppResult<Json<TaskResponse>> {
+    ensure_task_write_role(user.role)?;
+    let task = task_service::restore_task(&state, user.tenant_id, task_id, user.user_id).await?;
+    Ok(Json(TaskResponse::try_from(&task)?))
 }
 
 pub(super) async fn create_export(
@@ -464,9 +1537,16 @@ pub(super) async fn create_export(
         };
     }
 
+    let format = payload.export_format()?;
     let filters = payload.into_filters()?;
-    let job = match jobs_service::create_export_job(&state, user.tenant_id, user.user_id, &filters)
-        .await
+    let job = match jobs_service::create_export_job(
+        &state,
+        user.tenant_id,
+        user.user_id,
+        &filters,
+        format,
+    )
+    .await
     {
         Ok(job) => job,
         Err(error) => {
@@ -505,4 +1585,58 @@ pub(super) async fn get_job_result(
 ) -> AppResult<Json<JobResultResponse>> {
     let result = jobs_service::get_tenant_job_result(&state, job_id, user.tenant_id).await?;
     Ok(Json(result))
+}
+
+pub(super) async fn download_job_artifact(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(job_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let result = jobs_service::get_tenant_job_result(&state, job_id, user.tenant_id).await?;
+    let artifact = result
+        .result
+        .get("artifact")
+        .ok_or_else(|| AppError::NotFound("job has no artifact".into()))?;
+    let key = artifact
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::NotFound("job has no artifact".into()))?;
+    let content_type = artifact
+        .get("content_type")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+
+    let bytes = state
+        .storage
+        .get(key)
+        .await?
+        .ok_or_else(|| AppError::NotFound("artifact is no longer available".into()))?;
+
+    let mut filename: String = key
+        .rsplit('/')
+        .next()
+        .unwrap_or("export")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if filename.is_empty() {
+        filename = "export".to_owned();
+    }
+    Ok((
+        [
+            (CONTENT_TYPE, content_type),
+            (
+                CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        bytes,
+    ))
 }

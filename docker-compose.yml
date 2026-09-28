@@ -40,10 +40,22 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/fluxa
       REDIS_URL: redis://redis/
       JWT_SECRET: local-development-secret-local-development
+      GRPC_AUTH_TOKEN: local-development-grpc-token-local-development
       CORS_ALLOW_ORIGIN: "*"
+      MAILER_PROVIDER: ${MAILER_PROVIDER:-log}
+      ARTIFACT_STORAGE_DIR: /var/lib/fluxa/exports
+      MAX_ATTACHMENT_SIZE_BYTES: ${MAX_ATTACHMENT_SIZE_BYTES:-5242880}
+      WEBHOOK_DISPATCH_INTERVAL_MS: ${WEBHOOK_DISPATCH_INTERVAL_MS:-5000}
+      WEBHOOK_ALLOW_PRIVATE_URLS: ${WEBHOOK_ALLOW_PRIVATE_URLS:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-fluxa-backend}
+    volumes:
+      - exports-data:/var/lib/fluxa/exports
     ports:
       - "${HTTP_HOST_PORT:-18080}:8080"
-      - "${GRPC_HOST_PORT:-15051}:50051"
+      # gRPC carries internal admin APIs; bind to loopback only by default.
+      # Override GRPC_HOST_BIND to expose it beyond the local machine.
+      - "${GRPC_HOST_BIND:-127.0.0.1}:${GRPC_HOST_PORT:-15051}:50051"
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,6 +71,16 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/fluxa
       REDIS_URL: redis://redis/
       JWT_SECRET: local-development-secret-local-development
+      GRPC_AUTH_TOKEN: local-development-grpc-token-local-development
+      MAILER_PROVIDER: ${MAILER_PROVIDER:-log}
+      ARTIFACT_STORAGE_DIR: /var/lib/fluxa/exports
+      MAX_ATTACHMENT_SIZE_BYTES: ${MAX_ATTACHMENT_SIZE_BYTES:-5242880}
+      WEBHOOK_DISPATCH_INTERVAL_MS: ${WEBHOOK_DISPATCH_INTERVAL_MS:-5000}
+      WEBHOOK_ALLOW_PRIVATE_URLS: ${WEBHOOK_ALLOW_PRIVATE_URLS:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-fluxa-backend}
+    volumes:
+      - exports-data:/var/lib/fluxa/exports
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,3 +90,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  exports-data:

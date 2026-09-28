@@ -1,25 +1,54 @@
+pub mod attachments;
 pub mod auth;
+pub mod comments;
 pub mod jobs;
+pub mod labels;
+pub mod notifications;
 pub mod projects;
 pub mod tasks;
+pub mod webhooks;
 
-pub use auth::{
-    MembershipRecord, MembershipRole, ROLE_ADMIN, ROLE_MEMBER, ROLE_OWNER, RefreshTokenRecord,
-    TenantMemberRecord, TenantMemberResponse, TenantMembershipResponse, TenantRecord, UserRecord,
-    UserResponse, validate_role,
+pub use attachments::{
+    AttachmentRecord, AttachmentResponse, MAX_ATTACHMENTS_PER_TASK,
+    normalize_attachment_content_type, validate_attachment_file_name,
 };
+pub use auth::{
+    InvitationRecord, InvitationResponse, MembershipRecord, MembershipRole, OAuthAccountRecord,
+    ROLE_ADMIN, ROLE_MEMBER, ROLE_OWNER, RefreshTokenRecord, TOKEN_KIND_EMAIL_VERIFICATION,
+    TOKEN_KIND_PASSWORD_RESET, TenantMemberRecord, TenantMemberResponse, TenantMembershipResponse,
+    TenantRecord, UserRecord, UserResponse, UserTokenRecord, validate_role,
+};
+pub use comments::{CommentRecord, CommentResponse, PaginatedComments, validate_comment_body};
 pub use jobs::{
-    BackgroundJobRecord, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER, JOB_STATUS_QUEUED,
-    JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_TASK_EXPORT, JobResponse,
-    JobResultResponse, JobStatus, JobType,
+    BackgroundJobRecord, ExportFormat, JOB_STATUS_COMPLETED, JOB_STATUS_DEAD_LETTER,
+    JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_TYPE_DUE_REMINDER_SWEEP, JOB_TYPE_RETENTION_SWEEP,
+    JOB_TYPE_TASK_EXPORT, JobResponse, JobResultResponse, JobStatus, JobType,
+};
+pub use labels::{
+    CreateLabelInput, LabelRecord, LabelResponse, UpdateLabelInput, validate_task_label_ids,
+};
+pub use notifications::{
+    AuditEventRecord, AuditEventResponse, NOTIFICATION_STATUS_DEAD_LETTER,
+    NOTIFICATION_STATUS_PENDING, NOTIFICATION_STATUS_SENT, NewNotification,
+    NotificationFeedItemResponse, NotificationFeedResponse, NotificationPreferencesResponse,
+    NotificationRecord, PaginatedAuditEvents,
 };
 pub use projects::{
     CreateProjectInput, ProjectRecord, ProjectResponse, ProjectSummary, UpdateProjectInput,
 };
 pub use tasks::{
-    CreateTaskInput, DashboardSummary, PaginatedTaskAudit, PaginatedTasks, TASK_PRIORITY_HIGH,
-    TASK_PRIORITY_LOW, TASK_PRIORITY_MEDIUM, TASK_PRIORITY_URGENT, TASK_STATUS_ARCHIVED,
-    TASK_STATUS_DONE, TASK_STATUS_IN_PROGRESS, TASK_STATUS_OPEN, TaskAuditRecord,
-    TaskAuditResponse, TaskFilters, TaskPriority, TaskRecord, TaskResponse, TaskStatus,
-    UpdateTaskInput, validate_task_priority, validate_task_status,
+    CreateTaskInput, DashboardSummary, DueReminderCandidate, MAX_BULK_TASK_IDS, PaginatedTaskAudit,
+    PaginatedTasks, TASK_PRIORITY_HIGH, TASK_PRIORITY_LOW, TASK_PRIORITY_MEDIUM,
+    TASK_PRIORITY_URGENT, TASK_STATUS_ARCHIVED, TASK_STATUS_DONE, TASK_STATUS_IN_PROGRESS,
+    TASK_STATUS_OPEN, TaskAuditRecord, TaskAuditResponse, TaskFilters, TaskPriority, TaskRecord,
+    TaskResponse, TaskStatus, UpdateTaskInput, normalize_bulk_task_ids, validate_task_priority,
+    validate_task_status,
+};
+pub use webhooks::{
+    MAX_WEBHOOKS_PER_TENANT, SUPPORTED_WEBHOOK_EVENTS, WEBHOOK_DELIVERY_STATUS_DEAD_LETTER,
+    WEBHOOK_DELIVERY_STATUS_DELIVERED, WEBHOOK_DELIVERY_STATUS_PENDING,
+    WEBHOOK_EVENT_TASK_ARCHIVED, WEBHOOK_EVENT_TASK_CREATED, WEBHOOK_EVENT_TASK_RESTORED,
+    WEBHOOK_EVENT_TASK_STATUS_UPDATED, WEBHOOK_EVENT_TASK_UPDATED, WebhookDeliveryRecord,
+    WebhookDeliveryResponse, WebhookRecord, WebhookResponse, validate_webhook_events,
+    validate_webhook_url, webhook_signature,
 };

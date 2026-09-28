@@ -15,6 +15,7 @@ pub struct ProjectRecord {
     pub updated_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,10 +42,10 @@ pub struct UpdateProjectInput {
 
 impl UpdateProjectInput {
     pub fn validate(self) -> AppResult<Self> {
-        if let Some(name) = &self.name {
-            if name.trim().is_empty() {
-                return Err(AppError::Validation("project name cannot be empty".into()));
-            }
+        if let Some(name) = &self.name
+            && name.trim().is_empty()
+        {
+            return Err(AppError::Validation("project name cannot be empty".into()));
         }
 
         if self.name.is_none() && self.description.is_none() {
